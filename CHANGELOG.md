@@ -4,6 +4,18 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-09-28
+
+### Changed
+
+- **Refined Inline View**:
+  - Committed lines default to: `(avatar) ${author}, ${time}: ${message}` (e.g. `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`).
+  - Uncommitted lines default to: `${author}, ${time}: ${message}` (e.g. `You, 3 hours ago: Uncommitted changes`).
+- **Dynamic Uncommitted Timestamps**: Uncommitted lines now calculate real relative time from the file's modification timestamp (e.g., `3 hours ago`, `just now`) instead of static text.
+- **Distraction-Free Uncommitted Lines**: Avatar badges and hover card tooltips are disabled on uncommitted lines to keep cursor movement and typing completely clean.
+
+---
+
 ## [1.1.0] - 2026-09-28
 
 ### Added

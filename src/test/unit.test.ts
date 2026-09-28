@@ -170,8 +170,8 @@ test("FormatPresets - default and presets", () => {
     preset: "default",
     showAvatar: true,
     prefix: "",
-    format: "${author} committed ${time}: ${message}",
-    uncommittedFormat: "You: uncommitted changes",
+    format: "${author}, ${time}: ${message}",
+    uncommittedFormat: "${author}, ${time}: ${message}",
     dateStyle: "short",
     hoverDateFormat: "DD/MM/YYYY HH:mm",
     delay: 100,
@@ -180,11 +180,13 @@ test("FormatPresets - default and presets", () => {
 
   // 1. Default preset
   const defaultText = formatInlineText(mockBlame, baseConfig);
-  assert.strictEqual(defaultText.includes("Wahyu Ridiansyah committed"), true);
+  assert.strictEqual(defaultText.includes("Wahyu Ridiansyah, "), true);
   assert.strictEqual(defaultText.includes("Add JWT middleware"), true);
+  const uncommittedDefault = formatInlineText(uncommittedBlame, baseConfig);
+  assert.strictEqual(uncommittedDefault.startsWith("You, "), true);
   assert.strictEqual(
-    formatInlineText(uncommittedBlame, baseConfig),
-    "You: uncommitted changes",
+    uncommittedDefault.endsWith(": Uncommitted changes"),
+    true,
   );
 
   // 2. Minimalist preset (Option 1)
@@ -193,10 +195,12 @@ test("FormatPresets - default and presets", () => {
     preset: "minimalist",
   });
   assert.strictEqual(minText.startsWith("· Wahyu Ridiansyah,"), true);
-  assert.strictEqual(
-    formatInlineText(uncommittedBlame, { ...baseConfig, preset: "minimalist" }),
-    "· You, uncommitted changes",
-  );
+  const uncommittedMin = formatInlineText(uncommittedBlame, {
+    ...baseConfig,
+    preset: "minimalist",
+  });
+  assert.strictEqual(uncommittedMin.startsWith("· You, "), true);
+  assert.strictEqual(uncommittedMin.endsWith(" — Uncommitted changes"), true);
 
   // 3. Playful preset (Option 3)
   const playfulText = formatInlineText(mockBlame, {
@@ -221,7 +225,7 @@ test("FormatPresets - default and presets", () => {
     ...baseConfig,
     preset: "github",
   });
-  assert.strictEqual(ghText.includes("@Wahyu Ridiansyah committed"), true);
+  assert.strictEqual(ghText.includes("@Wahyu Ridiansyah, "), true);
 
   // 6. Breadcrumb preset (Option 6)
   const breadText = formatInlineText(mockBlame, {
@@ -257,7 +261,7 @@ test("FormatPresets - default and presets", () => {
     "[1234567] Wahyu Ridiansyah (wahyu@example.com) - Add JWT middleware",
   );
   const customUncommitted = formatInlineText(uncommittedBlame, customConfig);
-  assert.strictEqual(customUncommitted, "✍️ You: uncommitted changes");
+  assert.strictEqual(customUncommitted, "✍️ You: Uncommitted changes");
 });
 
 test("AvatarService - Initials and SVG generation", () => {

@@ -202,7 +202,7 @@ export class GlanceController {
 
     this.currentBlame = blame;
     let avatarUri: vscode.Uri | null = null;
-    if (this.config.showAvatar && this.avatarService) {
+    if (this.config.showAvatar && this.avatarService && !blame.isUncommitted) {
       const avatarPath = this.avatarService.getAvatarPath(
         blame.author,
         blame.authorEmail,
@@ -244,13 +244,10 @@ export class GlanceController {
       preset: wsConfig.get<GlancePreset>("preset", "default"),
       showAvatar: wsConfig.get<boolean>("showAvatar", true),
       prefix: wsConfig.get<string>("prefix", "👀 "),
-      format: wsConfig.get<string>(
-        "format",
-        "${author} committed ${time}: ${message}",
-      ),
+      format: wsConfig.get<string>("format", "${author}, ${time}: ${message}"),
       uncommittedFormat: wsConfig.get<string>(
         "uncommittedFormat",
-        "You: uncommitted changes",
+        "${author}, ${time}: ${message}",
       ),
       dateStyle: wsConfig.get<"relative" | "absolute" | "short">(
         "dateStyle",

@@ -104,14 +104,14 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
   - `gitGlance.toggleAvatar` command: Quickly toggle avatar visibility on/off via Command Palette.
 - **Colors**: Never hardcode hex colors in code. Always use `new vscode.ThemeColor('gitGlance.inlineColor')`, which falls back to theme-adaptive defaults defined in `package.json` (`#88888888` on dark, `#66666688` on light).
 - **Default Visual Style (User Default)**:
-  - Committed lines: `(avatar) ${author} committed ${time}: ${message}`
-  - Uncommitted / modified lines: `(avatar) You: uncommitted changes`
+  - Committed lines: `(avatar) ${author}, ${time}: ${message}`
+  - Uncommitted / modified lines: `${author}, ${time}: ${message}` (e.g. `You, 3 hours ago: Uncommitted changes`) (strictly no avatar badge, no hover tooltip popup)
 - **Supported Presets (`gitGlance.preset`)**:
-  1. `default`: `(avatar) Wahyu Ridiansyah committed 3 days ago: Add JWT middleware`
+  1. `default`: `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`
   2. `minimalist`: `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`
   3. `playful`: `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`
   4. `terminal`: `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"`
-  5. `github`: `@Wahyu Ridiansyah committed 3d ago: Add JWT middleware`
+  5. `github`: `@Wahyu Ridiansyah, 3d ago: Add JWT middleware`
   6. `breadcrumb`: `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`
   7. `bento`: `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`
   8. `comment`: `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`
@@ -120,6 +120,7 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
 ### 3.2 Rich Interactive Hover Card
 
 - Built with `vscode.MarkdownString` with `supportThemeIcons = true`, `isTrusted = true`, and `supportHtml = true`.
+- **Uncommitted Lines Policy**: Returns `undefined` so that no hover popup appears on uncommitted lines, keeping the editor distraction-free while typing.
 - Uses native VS Code Codicons (`$(...)`) instead of emoticons or external SVGs:
   - Zero disk I/O, zero network, zero decoding latency (instant 0 ms render).
   - 100% theme-adaptive (automatically adjusts to dark, light, and high-contrast themes).
@@ -181,7 +182,7 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
   - Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
 - **Interactive Hanging Prevention**: Always execute git subprocesses with `GIT_TERMINAL_PROMPT: "0"` in the process environment to prevent background git commands from hanging indefinitely on credential or passphrase prompts.
 - **Unsaved / Dirty Document Handling**: When the document is dirty (`document.isDirty`), pass document contents through stdin using `--contents -`.
-- **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`You: uncommitted changes`) displays in real time without waiting for cursor line jumps.
+- **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`uncommitted changes`) displays in real time without waiting for cursor line jumps.
 - **In-Memory Caching & Remote URL Resolution**:
   - Cache blame results keyed by `${filePath}:${documentVersion}:${line}`.
   - Invalidate file cache on document save (`onDidSaveTextDocument`) or document modification.

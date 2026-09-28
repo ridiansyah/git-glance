@@ -8,40 +8,40 @@ export interface PresetDefinition {
 
 export const PRESET_DEFINITIONS: Record<GlancePreset, PresetDefinition> = {
   default: {
-    format: "${author} committed ${time}: ${message}",
-    uncommittedFormat: "You: uncommitted changes",
+    format: "${author}, ${time}: ${message}",
+    uncommittedFormat: "${author}, ${time}: ${message}",
   },
   minimalist: {
     format: "· ${author}, ${time} — ${message}",
-    uncommittedFormat: "· You, uncommitted changes",
+    uncommittedFormat: "· ${author}, ${time} — ${message}",
   },
   playful: {
     format: "👀 ${author}, ${time} • 🚀 ${message}",
-    uncommittedFormat: "✨ You • Cooking some changes...",
+    uncommittedFormat: "✨ ${author}, ${time} • 📝 ${message}",
   },
   terminal: {
     format: '// git:${author} @ ${hash} (${time}) "${message}"',
-    uncommittedFormat: "// git:dirty *worktree changes",
+    uncommittedFormat: '// git:${author} (${time}) "${message}"',
   },
   github: {
-    format: "@${author} committed ${time}: ${message}",
-    uncommittedFormat: "@you: uncommitted changes",
+    format: "@${author}, ${time}: ${message}",
+    uncommittedFormat: "@${author}, ${time}: ${message}",
   },
   breadcrumb: {
     format: "› ${author} › ${time} › ${message}",
-    uncommittedFormat: "› You › Working Copy",
+    uncommittedFormat: "› ${author} › ${time} › ${message}",
   },
   bento: {
     format: "⚡ ${author} │ ⏱️ ${time} │ 💬 ${message}",
-    uncommittedFormat: "✏️ You │ ⏱️ now │ 📝 Uncommitted draft",
+    uncommittedFormat: "⚡ ${author} │ ⏱️ ${time} │ 📝 ${message}",
   },
   comment: {
     format: "/* by ${author}, ${time}: ${message} */",
-    uncommittedFormat: "/* by You: not committed */",
+    uncommittedFormat: "/* by ${author}, ${time}: ${message} */",
   },
   custom: {
-    format: "${author} committed ${time}: ${message}",
-    uncommittedFormat: "You: uncommitted changes",
+    format: "${author}, ${time}: ${message}",
+    uncommittedFormat: "${author}, ${time}: ${message}",
   },
 };
 
@@ -61,15 +61,21 @@ export function formatInlineText(
         ? config.uncommittedFormat
         : preset.uncommittedFormat;
 
+    const time = formatDateByStyle(blame.authorDate, config.dateStyle);
+    const date = formatShortDate(blame.authorDate);
+    const isoDate = formatAbsoluteDate(blame.authorDate);
+
     const uncommittedTokens: Record<string, string> = {
       "${prefix}": config.prefix || "",
-      "${author}": "You",
-      "${message}": "uncommitted changes",
-      "${time}": "now",
+      "${author}": blame.author || "You",
+      "${message}": blame.summary || "Uncommitted changes",
+      "${time}": time,
+      "${date}": date,
+      "${isoDate}": isoDate,
     };
 
     return uncommittedTemplate.replace(
-      /\$\{(prefix|author|message|time)\}/g,
+      /\$\{(prefix|author|message|time|date|isoDate)\}/g,
       (match) => uncommittedTokens[match] ?? match,
     );
   }

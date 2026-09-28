@@ -48,7 +48,10 @@ export class DecorationManager {
       config.preset === "custom";
 
     const hasAvatar = Boolean(
-      config.showAvatar && avatarUri && isPresetWithAvatar,
+      config.showAvatar &&
+      avatarUri &&
+      isPresetWithAvatar &&
+      !blame.isUncommitted,
     );
 
     const hoverMessage = config.showHover
@@ -128,20 +131,15 @@ export class DecorationManager {
   public buildHoverMessage(
     blame: BlameInfo,
     hoverDateFormat: string = "DD/MM/YYYY HH:mm",
-  ): vscode.MarkdownString {
+  ): vscode.MarkdownString | undefined {
+    if (blame.isUncommitted) {
+      return undefined;
+    }
+
     const md = new vscode.MarkdownString(undefined, true);
     md.supportThemeIcons = true;
     md.isTrusted = true;
     md.supportHtml = true;
-
-    if (blame.isUncommitted) {
-      md.appendMarkdown("### $(sparkle) Git Glance\n\n");
-      md.appendMarkdown("**Status:** Uncommitted changes\n\n");
-      md.appendMarkdown(
-        "You are working on this line right now. Changes have not been committed yet.",
-      );
-      return md;
-    }
 
     const timeAgo = formatRelativeTime(blame.authorDate);
     const exactDate = formatCustomDate(blame.authorDate, hoverDateFormat);

@@ -2,7 +2,7 @@
   "name": "git-glance",
   "displayName": "Git Glance",
   "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "ridiansyah",
   "author": {
     "name": "Wahyu Ridiansyah",
@@ -136,11 +136,11 @@
             "custom"
           ],
           "enumDescriptions": [
-            "Default: (avatar) Author committed 3 days ago: Message",
+            "Default: (avatar) Author, 3 days ago: Message",
             "Minimalist: · Author, 3d ago — Message",
             "Playful: 👀 Author, 3 days ago • 🚀 Message",
             "Terminal: // git:author @ hash (3d) \"Message\"",
-            "GitHub: @author committed 3d ago: Message",
+            "GitHub: @author, 3d ago: Message",
             "Breadcrumb: › Author › 3d ago › Message",
             "Bento: ⚡ Author │ ⏱️ 3d ago │ 💬 Message",
             "Comment: /* by Author, 3d ago: Message */",
@@ -161,13 +161,13 @@
         },
         "gitGlance.format": {
           "type": "string",
-          "default": "${author} committed ${time}: ${message}",
+          "default": "${author}, ${time}: ${message}",
           "description": "Custom inline template (when preset is 'custom'). Tokens: ${author}, ${time}, ${date}, ${isoDate}, ${message}, ${hash}, ${shortHash}, ${fullHash}, ${email}, ${authorEmail}, ${prefix}."
         },
         "gitGlance.uncommittedFormat": {
           "type": "string",
-          "default": "You: uncommitted changes",
-          "description": "Custom uncommitted line template (when preset is 'custom'). Tokens: ${author}, ${message}, ${prefix}, ${time}."
+          "default": "${author}, ${time}: ${message}",
+          "description": "Custom uncommitted line template (when preset is 'custom'). Tokens: ${author}, ${message}, ${prefix}, ${time}, ${date}, ${isoDate}."
         },
         "gitGlance.dateStyle": {
           "type": "string",

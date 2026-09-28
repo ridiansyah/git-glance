@@ -62,28 +62,28 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 ### Default Inline Style (with Profile Picture / Avatar):
 
 ```typescript
-const authService = new AuthService();  (avatar) Wahyu Ridiansyah committed 3 days ago: Add JWT middleware
-const session = authService.init();    (avatar) You: uncommitted changes
+const authService = new AuthService();  (avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware
+const session = authService.init();    You, 3 hours ago: Uncommitted changes
 ```
 
 ### Available Visual Presets (`gitGlance.preset`):
 
-| Preset       | Preview                                                              |
-| :----------- | :------------------------------------------------------------------- |
-| `default`    | `(avatar) Wahyu Ridiansyah committed 3 days ago: Add JWT middleware` |
-| `minimalist` | `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`                    |
-| `playful`    | `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`            |
-| `terminal`   | `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"`        |
-| `github`     | `@Wahyu Ridiansyah committed 3d ago: Add JWT middleware`             |
-| `breadcrumb` | `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`                   |
-| `bento`      | `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`            |
-| `comment`    | `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`              |
-| `custom`     | Personalized via `gitGlance.format`                                  |
+| Preset       | Preview                                                       |
+| :----------- | :------------------------------------------------------------ |
+| `default`    | `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`   |
+| `minimalist` | `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`             |
+| `playful`    | `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`     |
+| `terminal`   | `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"` |
+| `github`     | `@Wahyu Ridiansyah, 3d ago: Add JWT middleware`               |
+| `breadcrumb` | `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`            |
+| `bento`      | `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`     |
+| `comment`    | `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`       |
+| `custom`     | Personalized via `gitGlance.format`                           |
 
 ### Interactive Hover Card:
 
 ```markdown
-### 👀 Git Glance
+### Git Glance
 
 👤 Author: Wahyu Ridiansyah <wahyu@example.com>
 📅 Date: 3 days ago (25/09/2026 14:10)
@@ -116,18 +116,18 @@ Access these commands anytime from the VS Code Command Palette (`Cmd + Shift + P
 
 Open VS Code **Settings** (`Cmd + ,` or `Ctrl + ,`) and search for `Git Glance`:
 
-| Setting                       | Default                                     | Description                                                                                                                                                                |
-| :---------------------------- | :------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gitGlance.enabled`           | `true`                                      | Enable or disable inline annotations globally.                                                                                                                             |
-| `gitGlance.preset`            | `"default"`                                 | Choose a preset style (`default`, `minimalist`, `playful`, `terminal`, `github`, `breadcrumb`, `bento`, `comment`), or select `"custom"` to design your own format freely. |
-| `gitGlance.showAvatar`        | `true`                                      | Display profile picture / avatar next to inline annotation.                                                                                                                |
-| `gitGlance.format`            | `"${author} committed ${time}: ${message}"` | Custom template for inline annotation (used when preset is `"custom"`).                                                                                                    |
-| `gitGlance.uncommittedFormat` | `"You: uncommitted changes"`                | Custom template for uncommitted lines (used when preset is `"custom"`).                                                                                                    |
-| `gitGlance.dateStyle`         | `"relative"`                                | Style for dates: `"relative"` (e.g. `3 days ago`), `"short"`, or `"absolute"`.                                                                                             |
-| `gitGlance.hoverDateFormat`   | `"DD/MM/YYYY HH:mm"`                        | Format for the exact commit timestamp shown in hover card tooltip.                                                                                                         |
-| `gitGlance.delay`             | `100`                                       | Debounce delay in milliseconds before fetching git blame on cursor movement.                                                                                               |
-| `gitGlance.showHover`         | `true`                                      | Show interactive hover card when moving cursor over the annotation.                                                                                                        |
-| `gitGlance.prefix`            | `"👀 "`                                     | Prefix emoji or text token (available as `${prefix}` in custom format).                                                                                                    |
+| Setting                       | Default                            | Description                                                                                                                                                                |
+| :---------------------------- | :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitGlance.enabled`           | `true`                             | Enable or disable inline annotations globally.                                                                                                                             |
+| `gitGlance.preset`            | `"default"`                        | Choose a preset style (`default`, `minimalist`, `playful`, `terminal`, `github`, `breadcrumb`, `bento`, `comment`), or select `"custom"` to design your own format freely. |
+| `gitGlance.showAvatar`        | `true`                             | Display profile picture / avatar next to inline annotation.                                                                                                                |
+| `gitGlance.format`            | `"${author}, ${time}: ${message}"` | Custom template for inline annotation (used when preset is `"custom"`).                                                                                                    |
+| `gitGlance.uncommittedFormat` | `"${author}, ${time}: ${message}"` | Custom template for uncommitted lines (used when preset is `"custom"`).                                                                                                    |
+| `gitGlance.dateStyle`         | `"relative"`                       | Style for dates: `"relative"` (e.g. `3 days ago`), `"short"`, or `"absolute"`.                                                                                             |
+| `gitGlance.hoverDateFormat`   | `"DD/MM/YYYY HH:mm"`               | Format for the exact commit timestamp shown in hover card tooltip.                                                                                                         |
+| `gitGlance.delay`             | `100`                              | Debounce delay in milliseconds before fetching git blame on cursor movement.                                                                                               |
+| `gitGlance.showHover`         | `true`                             | Show interactive hover card when moving cursor over the annotation.                                                                                                        |
+| `gitGlance.prefix`            | `"👀 "`                            | Prefix emoji or text token (available as `${prefix}` in custom format).                                                                                                    |
 
 ### Custom Format Tokens (`gitGlance.format`):
 
