@@ -144,9 +144,14 @@ export class DecorationManager {
     const timeAgo = formatRelativeTime(blame.authorDate);
     const exactDate = formatCustomDate(blame.authorDate, hoverDateFormat);
 
-    md.appendMarkdown(`### $(eye) Git Glance\n\n`);
+    const authorDisplay =
+      blame.isCurrentUser && blame.author.toLowerCase() !== "you"
+        ? `You (${escapeMarkdown(blame.author)})`
+        : escapeMarkdown(blame.author);
+
+    md.appendMarkdown(`### Git Glance\n\n`);
     md.appendMarkdown(
-      `$(account) **Author:** ${escapeMarkdown(blame.author)} ${blame.authorEmail ? `*<${escapeMarkdown(blame.authorEmail)}>*` : ""}\n\n`,
+      `$(account) **Author:** ${authorDisplay} ${blame.authorEmail ? `*<${escapeMarkdown(blame.authorEmail)}>*` : ""}\n\n`,
     );
     md.appendMarkdown(`$(calendar) **Date:** ${timeAgo} (${exactDate})\n\n`);
     md.appendMarkdown(`$(git-commit) **Commit:** \`${blame.shortSha}\`\n\n`);

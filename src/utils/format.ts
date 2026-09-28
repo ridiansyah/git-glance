@@ -86,9 +86,11 @@ export function formatInlineText(
 
   const template = config.preset === "custom" ? config.format : preset.format;
 
+  const authorName = blame.isCurrentUser ? "You" : blame.author;
+
   const tokens: Record<string, string> = {
     "${prefix}": config.prefix || "",
-    "${author}": blame.author,
+    "${author}": authorName,
     "${time}": time,
     "${date}": date,
     "${isoDate}": isoDate,

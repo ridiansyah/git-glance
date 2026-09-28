@@ -100,7 +100,7 @@ export function registerCommands(
           {
             label: `$(git-commit) Commit: ${blame.shortSha}`,
             description: blame.summary,
-            detail: `Author: ${blame.author} • ${blame.authorDate.toLocaleString()}`,
+            detail: `Author: ${blame.isCurrentUser && blame.author.toLowerCase() !== "you" ? `You (${blame.author})` : blame.author} • ${blame.authorDate.toLocaleString()}`,
           },
           {
             label: "$(clippy) Copy Commit Hash",

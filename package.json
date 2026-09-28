@@ -2,7 +2,7 @@
   "name": "git-glance",
   "displayName": "Git Glance",
   "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "ridiansyah",
   "author": {
     "name": "Wahyu Ridiansyah",

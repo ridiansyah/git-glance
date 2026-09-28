@@ -21,7 +21,7 @@
 - **Package Manager**: `pnpm` (run with `pnpm install`, `pnpm run compile`, `pnpm test`).
 - **Language**: TypeScript (ES2022 target, strict mode enabled).
 - **Bundler**: `esbuild` (Ultra-fast CJS bundling into `dist/extension.js`, externalizing `vscode`).
-- **Packaging**: `@vscode/vsce` (Produces ultra-compact `git-glance-1.0.0.vsix` under ~20 KB bundle / ~50 KB with icon).
+- **Packaging**: `@vscode/vsce` (Produces ultra-compact `.vsix` package under ~25 KB minified bundle / ~31 KB total package with icon).
 - **Testing**: Built-in `node:test` runner (`pnpm test`) compiling tests on the fly via `esbuild`.
 
 ---
@@ -104,17 +104,23 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
   - `gitGlance.toggleAvatar` command: Quickly toggle avatar visibility on/off via Command Palette.
 - **Colors**: Never hardcode hex colors in code. Always use `new vscode.ThemeColor('gitGlance.inlineColor')`, which falls back to theme-adaptive defaults defined in `package.json` (`#88888888` on dark, `#66666688` on light).
 - **Default Visual Style (User Default)**:
-  - Committed lines: `(avatar) ${author}, ${time}: ${message}`
+  - Committed lines (current user): `(avatar) You, 3 days ago: ${message}` (avatar badge preserved for current user, author token replaced with `You`)
+  - Committed lines (other authors): `(avatar) ${author}, ${time}: ${message}` (e.g. `(avatar) Linus Torvalds, 3 days ago: Add JWT middleware`)
   - Uncommitted / modified lines: `${author}, ${time}: ${message}` (e.g. `You, 3 hours ago: Uncommitted changes`) (strictly no avatar badge, no hover tooltip popup)
+- **Current User Resolution & "You" Display**:
+  - Automatically identifies whether the commit author matches the current Git user identity strictly via `git config user.email` (cached per repository in `currentUserEmailCache`). Validating exclusively by email eliminates false positives from common author names shared by different contributors.
+  - When `isCurrentUser` is `true`, `${author}` token in inline text dynamically resolves to `"You"` across all presets.
+  - The real author name and email remain preserved in `blame.author` and `blame.authorEmail`, guaranteeing that `AvatarService` generates and resolves the user's actual avatar badge (initials/remote photo).
+  - Hover tooltips and details quick picks show `You (${blame.author})` for transparency and precision.
 - **Supported Presets (`gitGlance.preset`)**:
-  1. `default`: `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`
-  2. `minimalist`: `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`
-  3. `playful`: `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`
-  4. `terminal`: `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"`
-  5. `github`: `@Wahyu Ridiansyah, 3d ago: Add JWT middleware`
-  6. `breadcrumb`: `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`
-  7. `bento`: `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`
-  8. `comment`: `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`
+  1. `default`: `(avatar) You, 3 days ago: Add JWT middleware` (or other author's name)
+  2. `minimalist`: `· You, 3d ago — Add JWT middleware`
+  3. `playful`: `👀 You, 3 days ago • 🚀 Add JWT middleware`
+  4. `terminal`: `// git:You @ 7a8f3b2 (3d) "Add JWT middleware"`
+  5. `github`: `@You, 3d ago: Add JWT middleware`
+  6. `breadcrumb`: `› You › 3d ago › Add JWT middleware`
+  7. `bento`: `⚡ You │ ⏱️ 3d ago │ 💬 Add JWT middleware`
+  8. `comment`: `/* by You, 3d ago: Add JWT middleware */`
   9. `custom`: Uses custom `gitGlance.format` and `gitGlance.uncommittedFormat`.
 
 ### 3.2 Rich Interactive Hover Card
@@ -126,7 +132,7 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
   - 100% theme-adaptive (automatically adjusts to dark, light, and high-contrast themes).
   - Native anchor styling in action links without layout or underline breaks.
 - Layout:
-  1. Header with icon and title (`### $(eye) Git Glance` or `### $(sparkle) Git Glance`).
+  1. Header with title (`### Git Glance`).
   2. Author line: `$(account) **Author:** ...`.
   3. Date line: `$(calendar) **Date:** ${timeAgo} (${exactDate})` (formatted with `gitGlance.hoverDateFormat`, defaulting to `DD/MM/YYYY HH:mm`).
   4. Commit line: `$(git-commit) **Commit:** ...`.
@@ -182,11 +188,13 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
   - Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
 - **Interactive Hanging Prevention**: Always execute git subprocesses with `GIT_TERMINAL_PROMPT: "0"` in the process environment to prevent background git commands from hanging indefinitely on credential or passphrase prompts.
 - **Unsaved / Dirty Document Handling**: When the document is dirty (`document.isDirty`), pass document contents through stdin using `--contents -`.
+- **Accurate Uncommitted Timestamps via `fs.stat.mtime`**: Git's internal C implementation of `git blame` assigns `time(NULL)` (`Date.now()`) to all uncommitted lines. To prevent uncommitted lines from perpetually displaying `"just now"` across editor re-blames, `GitService` reads `(await fs.promises.stat(filePath)).mtime` when `isUncommitted && !isDirty`. When the document is dirty in memory, it reflects the active typing session, and once saved, preserves the actual disk file modification timestamp (e.g. `3 hours ago`, `yesterday`).
 - **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`uncommitted changes`) displays in real time without waiting for cursor line jumps.
 - **In-Memory Caching & Remote URL Resolution**:
   - Cache blame results keyed by `${filePath}:${documentVersion}:${line}`.
   - Invalidate file cache on document save (`onDidSaveTextDocument`) or document modification.
-  - Await `getRemoteCommitUrl` resolution before returning blame info so `remoteCommitUrl` is immediately available on initial hover render and avatar lookups.
+  - Await `getRemoteCommitUrl` and `getCurrentUserEmail` resolution concurrently via `Promise.all` so `remoteCommitUrl` and `isCurrentUser` are immediately available on initial hover render and avatar lookups.
+  - Cache repository-level Git current user email (`user.email`) in `currentUserEmailCache` to avoid spawning redundant git subprocesses on every line blame.
 - **Debouncing**: Cursor line changes and active-line document changes must be debounced (default `100ms`) to avoid spawning redundant git processes when navigating or typing rapidly.
 - **Race Condition & Boundary Prevention**:
   - After awaiting an async git operation, always verify that `vscode.window.activeTextEditor === editor` and `editor.selection.active.line === line` before setting decorations.
@@ -219,7 +227,7 @@ pnpm run package:vsix  # produce compact .vsix package
 - **Release Documentation**: Every release MUST be logged in [`CHANGELOG.md`](file:///Users/ridiansyah/Developer/git-glance/CHANGELOG.md) adhering to Keep a Changelog.
 - **Community Standards**: Maintain [`CONTRIBUTING.md`](file:///Users/ridiansyah/Developer/git-glance/CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](file:///Users/ridiansyah/Developer/git-glance/CODE_OF_CONDUCT.md), and [`SECURITY.md`](file:///Users/ridiansyah/Developer/git-glance/SECURITY.md) in English.
 - **Marketplace Assets**: The extension icon is located at `images/icon.png` (256x256 PNG) and must be bundled into the package via `.vscodeignore` whitelist.
-- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under 25 KB). Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
+- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under ~35 KB with icon). Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
 
 ---
 

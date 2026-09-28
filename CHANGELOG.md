@@ -4,6 +4,19 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-09-28
+
+### Added
+
+- **Current Git User Detection ("You" Display)**: Automatically detects when a commit was authored by the current Git user strictly by email (`git config user.email`), preventing name collisions across different contributors. Displays `You` inline (e.g. `(avatar) You, 3 days ago: Add JWT middleware`) while preserving the user's authentic avatar badge and full author details in hover cards.
+
+### Changed
+
+- **Cleaner Hover Card Header**: Simplified the commit hover card title to clean `### Git Glance` for a sleeker visual presentation.
+- **Security Policy**: Broadened supported extension version range to `1.x.x` in `SECURITY.md`.
+
+---
+
 ## [1.1.1] - 2026-09-28
 
 ### Changed

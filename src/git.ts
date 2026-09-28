@@ -1,11 +1,13 @@
 import * as cp from "child_process";
 import * as path from "path";
+import * as fs from "fs";
 import { BlameInfo } from "./types";
 
 export class GitService {
   private repoRootCache = new Map<string, string | null>();
   private remoteUrlCache = new Map<string, string | null>();
   private blameCache = new Map<string, BlameInfo>();
+  private currentUserEmailCache = new Map<string, string | null>();
 
   /**
    * Clears the blame cache (e.g. on file save or document change).
@@ -19,6 +21,7 @@ export class GitService {
       }
     } else {
       this.blameCache.clear();
+      this.currentUserEmailCache.clear();
     }
   }
 
@@ -29,6 +32,7 @@ export class GitService {
     this.blameCache.clear();
     this.repoRootCache.clear();
     this.remoteUrlCache.clear();
+    this.currentUserEmailCache.clear();
   }
 
   /**
@@ -151,10 +155,28 @@ export class GitService {
 
       const blame = this.parsePorcelain(output, line, repoRoot);
       if (blame) {
-        const remoteUrl = await this.getRemoteCommitUrl(repoRoot, blame.sha);
+        if (blame.isUncommitted && !isDirty) {
+          try {
+            const stat = await fs.promises.stat(filePath);
+            blame.authorDate = stat.mtime;
+            blame.committerDate = stat.mtime;
+          } catch {
+            // Keep default timestamp
+          }
+        }
+
+        const [remoteUrl, currentUserEmail] = await Promise.all([
+          this.getRemoteCommitUrl(repoRoot, blame.sha),
+          this.getCurrentUserEmail(repoRoot),
+        ]);
+
         if (remoteUrl) {
           blame.remoteCommitUrl = remoteUrl;
         }
+
+        blame.isCurrentUser =
+          blame.isUncommitted ||
+          this.isCurrentUser(blame.authorEmail, currentUserEmail);
 
         if (this.blameCache.size >= 500) {
           const oldestKey = this.blameCache.keys().next().value;
@@ -168,6 +190,66 @@ export class GitService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Retrieves the current git user email (user.email) for a repository.
+   */
+  public async getCurrentUserEmail(repoRoot: string): Promise<string | null> {
+    if (this.currentUserEmailCache.has(repoRoot)) {
+      return this.currentUserEmailCache.get(repoRoot)!;
+    }
+
+    try {
+      const email = (await this.execGit(["config", "user.email"], repoRoot))
+        .trim()
+        .replace(/^["']|["']$/g, "");
+
+      const resolvedEmail = email || process.env.GIT_AUTHOR_EMAIL || "";
+
+      if (!resolvedEmail) {
+        this.currentUserEmailCache.set(repoRoot, null);
+        return null;
+      }
+
+      this.currentUserEmailCache.set(repoRoot, resolvedEmail);
+      return resolvedEmail;
+    } catch {
+      const fallbackEmail = process.env.GIT_AUTHOR_EMAIL || "";
+      if (fallbackEmail) {
+        this.currentUserEmailCache.set(repoRoot, fallbackEmail);
+        return fallbackEmail;
+      }
+      this.currentUserEmailCache.set(repoRoot, null);
+      return null;
+    }
+  }
+
+  /**
+   * Checks whether the given commit author email matches the current Git user email.
+   */
+  public isCurrentUser(
+    authorEmail: string,
+    currentUserEmail: string | null,
+  ): boolean {
+    if (!currentUserEmail) {
+      return false;
+    }
+
+    const cleanAuthorEmail = authorEmail
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .toLowerCase();
+    const cleanCurrentEmail = currentUserEmail
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .toLowerCase();
+
+    return (
+      cleanCurrentEmail.length > 0 &&
+      cleanAuthorEmail.length > 0 &&
+      cleanCurrentEmail === cleanAuthorEmail
+    );
   }
 
   /**
@@ -273,6 +355,7 @@ export class GitService {
       summary,
       line,
       isUncommitted,
+      isCurrentUser: isUncommitted || author.toLowerCase() === "you",
       repoRoot,
     };
   }

@@ -31,8 +31,8 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 | Feature / Metric           | ⚡ Git Glance                           | Heavy Git Extensions (e.g. GitLens)        |
 | :------------------------- | :-------------------------------------- | :----------------------------------------- |
-| **Package Size (VSIX)**    | **~28 KB**                              | **~25 - 40 MB** (~1000× larger)            |
-| **Minified Bundle**        | **~21 KB**                              | **~5 - 10 MB**                             |
+| **Package Size (VSIX)**    | **~31 KB**                              | **~25 - 40 MB** (~1000× larger)            |
+| **Minified Bundle**        | **~23 KB**                              | **~5 - 10 MB**                             |
 | **Runtime Dependencies**   | **0** (Zero external dependencies)      | Dozens of npm packages                     |
 | **Startup Impact**         | **0 ms** (`onStartupFinished`)          | Often adds noticeable startup delay        |
 | **Blame Execution**        | **Targeted 1-line blame** (`-L n,n`)    | Full-file / repository indexing            |
@@ -62,23 +62,26 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 ### Default Inline Style (with Profile Picture / Avatar):
 
 ```typescript
-const authService = new AuthService();  (avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware
+const authService = new AuthService();  (avatar) You, 3 days ago: Add JWT middleware
+const dbService = new DbService();      (avatar) Linus Torvalds, 3 days ago: Add connection pool
 const session = authService.init();    You, 3 hours ago: Uncommitted changes
 ```
 
+> **Smart Author Recognition**: Git Glance automatically detects if you authored the commit using your configured Git email (`git config user.email`) and displays `You` instead of your name, while keeping your avatar badge intact!
+
 ### Available Visual Presets (`gitGlance.preset`):
 
-| Preset       | Preview                                                       |
-| :----------- | :------------------------------------------------------------ |
-| `default`    | `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`   |
-| `minimalist` | `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`             |
-| `playful`    | `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`     |
-| `terminal`   | `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"` |
-| `github`     | `@Wahyu Ridiansyah, 3d ago: Add JWT middleware`               |
-| `breadcrumb` | `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`            |
-| `bento`      | `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`     |
-| `comment`    | `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`       |
-| `custom`     | Personalized via `gitGlance.format`                           |
+| Preset       | Preview (Your Commits)                           | Preview (Other Authors)                                       |
+| :----------- | :----------------------------------------------- | :------------------------------------------------------------ |
+| `default`    | `(avatar) You, 3 days ago: Add JWT middleware`   | `(avatar) Wahyu Ridiansyah, 3 days ago: Add JWT middleware`   |
+| `minimalist` | `· You, 3d ago — Add JWT middleware`             | `· Wahyu Ridiansyah, 3d ago — Add JWT middleware`             |
+| `playful`    | `👀 You, 3 days ago • 🚀 Add JWT middleware`     | `👀 Wahyu Ridiansyah, 3 days ago • 🚀 Add JWT middleware`     |
+| `terminal`   | `// git:You @ 7a8f3b2 (3d) "Add JWT middleware"` | `// git:Wahyu Ridiansyah @ 7a8f3b2 (3d) "Add JWT middleware"` |
+| `github`     | `@You, 3d ago: Add JWT middleware`               | `@Wahyu Ridiansyah, 3d ago: Add JWT middleware`               |
+| `breadcrumb` | `› You › 3d ago › Add JWT middleware`            | `› Wahyu Ridiansyah › 3d ago › Add JWT middleware`            |
+| `bento`      | `⚡ You │ ⏱️ 3d ago │ 💬 Add JWT middleware`     | `⚡ Wahyu Ridiansyah │ ⏱️ 3d ago │ 💬 Add JWT middleware`     |
+| `comment`    | `/* by You, 3d ago: Add JWT middleware */`       | `/* by Wahyu Ridiansyah, 3d ago: Add JWT middleware */`       |
+| `custom`     | Personalized via `gitGlance.format`              | Personalized via `gitGlance.format`                           |
 
 ### Interactive Hover Card:
 

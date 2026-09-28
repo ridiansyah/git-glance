@@ -12,6 +12,7 @@ export interface BlameInfo {
   body?: string;
   line: number; // 0-based
   isUncommitted: boolean;
+  isCurrentUser?: boolean;
   repoRoot?: string;
   remoteCommitUrl?: string;
   avatarPath?: string;

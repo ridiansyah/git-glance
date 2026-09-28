@@ -262,6 +262,74 @@ test("FormatPresets - default and presets", () => {
   );
   const customUncommitted = formatInlineText(uncommittedBlame, customConfig);
   assert.strictEqual(customUncommitted, "✍️ You: Uncommitted changes");
+
+  // 10. Current User detection formatting (swaps author name to You)
+  const currentUserBlame = {
+    ...mockBlame,
+    isCurrentUser: true,
+  };
+  const currentUserDefaultText = formatInlineText(currentUserBlame, baseConfig);
+  assert.strictEqual(currentUserDefaultText.startsWith("You, "), true);
+  assert.strictEqual(
+    currentUserDefaultText.includes("Add JWT middleware"),
+    true,
+  );
+  assert.strictEqual(
+    currentUserDefaultText.includes("Wahyu Ridiansyah"),
+    false,
+  );
+
+  const currentUserTerminalText = formatInlineText(currentUserBlame, {
+    ...baseConfig,
+    preset: "terminal",
+  });
+  assert.strictEqual(
+    currentUserTerminalText.includes("// git:You @ 1234567"),
+    true,
+  );
+
+  const currentUserCustom = formatInlineText(currentUserBlame, customConfig);
+  assert.strictEqual(
+    currentUserCustom,
+    "[1234567] You (wahyu@example.com) - Add JWT middleware",
+  );
+});
+
+test("GitService - isCurrentUser matching", () => {
+  const gitService = new GitService();
+  const currentUserEmail = "wahyuridiansyah@gmail.com";
+
+  // 1. Matches by exact email
+  assert.strictEqual(
+    gitService.isCurrentUser("wahyuridiansyah@gmail.com", currentUserEmail),
+    true,
+  );
+
+  // 2. Matches by case-insensitive email
+  assert.strictEqual(
+    gitService.isCurrentUser("Wahyuridiansyah@Gmail.Com", currentUserEmail),
+    true,
+  );
+
+  // 3. Handles email with surrounding quotes or whitespace
+  assert.strictEqual(
+    gitService.isCurrentUser(' "wahyuridiansyah@gmail.com" ', currentUserEmail),
+    true,
+  );
+
+  // 4. Does not match different email (prevents collision across people with same name)
+  assert.strictEqual(
+    gitService.isCurrentUser("another.person@example.com", currentUserEmail),
+    false,
+  );
+
+  // 5. Handles null or empty currentUserEmail
+  assert.strictEqual(
+    gitService.isCurrentUser("wahyu@example.com", null),
+    false,
+  );
+  assert.strictEqual(gitService.isCurrentUser("wahyu@example.com", ""), false);
+  assert.strictEqual(gitService.isCurrentUser("", currentUserEmail), false);
 });
 
 test("AvatarService - Initials and SVG generation", () => {
