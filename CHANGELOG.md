@@ -4,6 +4,17 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-09-28
+
+### Added
+
+- **Configurable Hover Date Format**: Added `gitGlance.hoverDateFormat` setting to customize the exact timestamp displayed in the hover card tooltip.
+- **Rich Token Support**: Added flexible date pattern tokens for `formatCustomDate`: `DD`, `D`, `MM`, `M`, `YYYY`, `YY`, `HH`, `H`, `hh`, `h`, `mm`, `m`, `ss`, `s`, `A`, `a`, `MMM`, `MMMM`, `ddd`, `dddd`, and `[escaped brackets]`.
+
+### Changed
+
+- Updated default hover date format from `YYYY-MM-DD HH:mm` to `DD/MM/YYYY HH:mm` (e.g., `25/09/2026 14:10`).
+
 ---
 
 ## [1.0.0] - 2026-09-28

@@ -38,6 +38,7 @@ export interface GitGlanceConfig {
   format: string;
   uncommittedFormat: string;
   dateStyle: DateStyle;
+  hoverDateFormat: string;
   delay: number;
   showHover: boolean;
 }

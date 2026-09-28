@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://img.shields.io/visual-studio-marketplace/v/ridiansyah.git-glance?color=blue&label=VS%20Code%20Marketplace" alt="VS Code Marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://badgen.net/vs-marketplace/v/ridiansyah.git-glance" alt="VS Code Marketplace"></a>
   <a href="https://github.com/ridiansyah/git-glance/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/vscode-%5E1.85.0-blue.svg" alt="VS Code Version">
   <img src="https://img.shields.io/badge/bundle%20size-%7E21%20KB-brightgreen.svg" alt="Bundle Size">
@@ -86,7 +86,7 @@ const session = authService.init();    (avatar) You: uncommitted changes
 ### 👀 Git Glance
 
 👤 Author: Wahyu Ridiansyah <wahyu@example.com>
-📅 Date: 3 days ago (2026-09-25 14:10)
+📅 Date: 3 days ago (25/09/2026 14:10)
 🔖 Commit: 7a8f3b2
 
 > Add JWT middleware
@@ -124,6 +124,7 @@ Open VS Code **Settings** (`Cmd + ,` or `Ctrl + ,`) and search for `Git Glance`:
 | `gitGlance.format`            | `"${author} committed ${time}: ${message}"` | Custom template for inline annotation (used when preset is `"custom"`).                                                                                                    |
 | `gitGlance.uncommittedFormat` | `"You: uncommitted changes"`                | Custom template for uncommitted lines (used when preset is `"custom"`).                                                                                                    |
 | `gitGlance.dateStyle`         | `"relative"`                                | Style for dates: `"relative"` (e.g. `3 days ago`), `"short"`, or `"absolute"`.                                                                                             |
+| `gitGlance.hoverDateFormat`   | `"DD/MM/YYYY HH:mm"`                        | Format for the exact commit timestamp shown in hover card tooltip.                                                                                                         |
 | `gitGlance.delay`             | `100`                                       | Debounce delay in milliseconds before fetching git blame on cursor movement.                                                                                               |
 | `gitGlance.showHover`         | `true`                                      | Show interactive hover card when moving cursor over the annotation.                                                                                                        |
 | `gitGlance.prefix`            | `"👀 "`                                     | Prefix emoji or text token (available as `${prefix}` in custom format).                                                                                                    |
@@ -146,6 +147,24 @@ When `gitGlance.preset` is set to `"custom"`, you can freely compose your own li
 | `${prefix}`                | Custom prefix string/emoji        | `👀 `                 |
 
 For uncommitted lines (`gitGlance.uncommittedFormat`), `${author}`, `${message}`, `${prefix}`, and `${time}` are supported.
+
+### Hover Date Format Tokens (`gitGlance.hoverDateFormat`):
+
+Customize the exact timestamp displayed in the hover card tooltip using these tokens:
+
+| Token          | Description                        | Example                   |
+| :------------- | :--------------------------------- | :------------------------ |
+| `DD` / `D`     | Day of month (2-digit / 1-digit)   | `25`, `5`                 |
+| `MM` / `M`     | Month number (2-digit / 1-digit)   | `09`, `9`                 |
+| `YYYY` / `YY`  | Year (4-digit / 2-digit)           | `2026`, `26`              |
+| `HH` / `H`     | 24-hour format (2-digit / 1-digit) | `14`, `9`                 |
+| `hh` / `h`     | 12-hour format (2-digit / 1-digit) | `02`, `2`                 |
+| `mm` / `m`     | Minutes (2-digit / 1-digit)        | `10`, `5`                 |
+| `ss` / `s`     | Seconds (2-digit / 1-digit)        | `05`, `5`                 |
+| `A` / `a`      | AM/PM or am/pm                     | `PM`, `pm`                |
+| `MMM` / `MMMM` | Month name (short / full)          | `Sep`, `September`        |
+| `ddd` / `dddd` | Weekday name (short / full)        | `Fri`, `Friday`           |
+| `[...]`        | Escaped literal text               | `[at] HH:mm` → `at 14:10` |
 
 ---
 

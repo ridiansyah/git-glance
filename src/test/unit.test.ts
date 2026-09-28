@@ -1,6 +1,6 @@
 import test from "node:test";
 import * as assert from "node:assert";
-import { formatRelativeTime } from "../utils/date";
+import { formatRelativeTime, formatCustomDate } from "../utils/date";
 import { GitService } from "../git";
 import { formatInlineText } from "../utils/format";
 import { GitGlanceConfig } from "../types";
@@ -40,6 +40,63 @@ test("Date utilities - formatRelativeTime", () => {
   // 2 years ago
   const t2y = new Date(now.getTime() - 730 * 24 * 60 * 60 * 1000);
   assert.strictEqual(formatRelativeTime(t2y, now), "2 years ago");
+});
+
+test("Date utilities - formatCustomDate", () => {
+  // Test afternoon date: 2026-09-25 14:10:05 (Friday)
+  const afternoonDate = new Date(2026, 8, 25, 14, 10, 5);
+
+  // Default format: DD/MM/YYYY HH:mm
+  assert.strictEqual(formatCustomDate(afternoonDate), "25/09/2026 14:10");
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "DD/MM/YYYY HH:mm"),
+    "25/09/2026 14:10",
+  );
+
+  // ISO style
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "YYYY-MM-DD HH:mm"),
+    "2026-09-25 14:10",
+  );
+
+  // 12-hour style with AM/PM
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "DD/MM/YYYY hh:mm:ss A"),
+    "25/09/2026 02:10:05 PM",
+  );
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "D/M/YY h:m:s a"),
+    "25/9/26 2:10:5 pm",
+  );
+
+  // Words & escaped brackets
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "dddd, DD MMMM YYYY [at] HH:mm"),
+    "Friday, 25 September 2026 at 14:10",
+  );
+  assert.strictEqual(
+    formatCustomDate(afternoonDate, "ddd, DD MMM YYYY"),
+    "Fri, 25 Sep 2026",
+  );
+
+  // Test morning date: 2026-01-05 08:05:02 (Monday)
+  const morningDate = new Date(2026, 0, 5, 8, 5, 2);
+  assert.strictEqual(
+    formatCustomDate(morningDate, "DD/MM/YYYY HH:mm"),
+    "05/01/2026 08:05",
+  );
+  assert.strictEqual(
+    formatCustomDate(morningDate, "D/M/YYYY h:m a"),
+    "5/1/2026 8:5 am",
+  );
+  assert.strictEqual(
+    formatCustomDate(morningDate, "dddd, MMMM D, YYYY"),
+    "Monday, January 5, 2026",
+  );
+
+  // Fallback on empty or invalid input
+  assert.strictEqual(formatCustomDate(morningDate, ""), "05/01/2026 08:05");
+  assert.strictEqual(formatCustomDate(new Date(NaN)), "");
 });
 
 test("GitService - formatCommitWebUrl", () => {
@@ -116,6 +173,7 @@ test("FormatPresets - default and presets", () => {
     format: "${author} committed ${time}: ${message}",
     uncommittedFormat: "You: uncommitted changes",
     dateStyle: "short",
+    hoverDateFormat: "DD/MM/YYYY HH:mm",
     delay: 100,
     showHover: true,
   };

@@ -127,7 +127,7 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
 - Layout:
   1. Header with icon and title (`### $(eye) Git Glance` or `### $(sparkle) Git Glance`).
   2. Author line: `$(account) **Author:** ...`.
-  3. Date line: `$(calendar) **Date:** ...`.
+  3. Date line: `$(calendar) **Date:** ${timeAgo} (${exactDate})` (formatted with `gitGlance.hoverDateFormat`, defaulting to `DD/MM/YYYY HH:mm`).
   4. Commit line: `$(git-commit) **Commit:** ...`.
   5. Blockquote containing commit message summary and body.
   6. Action links: `[$(copy) Copy Hash](command:gitGlance.copyHash?...)`, `[$(info) Details](command:gitGlance.showCommitDetails?...)`, and `[$(link-external) Open in Browser](url)`.
@@ -148,6 +148,23 @@ When `gitGlance.preset` is set to `"custom"`, users can freely compose their inl
 - `${prefix}`: Configured prefix text/emoji
 
 For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${message}`, `${prefix}`, and `${time}` are supported.
+
+### 3.4 Hover Date Format (`gitGlance.hoverDateFormat`)
+
+- Default: `"DD/MM/YYYY HH:mm"` (e.g. `25/09/2026 14:10`).
+- Configurable via `gitGlance.hoverDateFormat` setting.
+- Evaluated by `formatCustomDate(date: Date, pattern: string)` in `src/utils/date.ts`.
+- Supported single-pass tokens:
+  - `YYYY` (4-digit year), `YY` (2-digit year)
+  - `MMMM` (Full month name), `MMM` (Short month name), `MM` (2-digit month), `M` (1-digit month)
+  - `DD` (2-digit day of month), `D` (1-digit day of month)
+  - `dddd` (Full weekday name), `ddd` (Short weekday name)
+  - `HH` (2-digit 24-hr), `H` (1-digit 24-hr)
+  - `hh` (2-digit 12-hr), `h` (1-digit 12-hr)
+  - `mm` (2-digit minute), `m` (1-digit minute)
+  - `ss` (2-digit second), `s` (1-digit second)
+  - `A` (`AM`/`PM`), `a` (`am`/`pm`)
+  - `[...]` Escaped literal text (e.g. `[at] HH:mm` renders `at 14:10`)
 
 ---
 

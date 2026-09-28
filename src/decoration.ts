@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { BlameInfo, GitGlanceConfig } from "./types";
-import { formatRelativeTime, formatAbsoluteDate } from "./utils/date";
+import { formatRelativeTime, formatCustomDate } from "./utils/date";
 import { formatInlineText, escapeMarkdown } from "./utils/format";
 
 export class DecorationManager {
@@ -52,7 +52,7 @@ export class DecorationManager {
     );
 
     const hoverMessage = config.showHover
-      ? this.buildHoverMessage(blame)
+      ? this.buildHoverMessage(blame, config.hoverDateFormat)
       : undefined;
 
     // 2. Dual-decoration architecture:
@@ -125,7 +125,10 @@ export class DecorationManager {
   /**
    * Builds a modern, clean, fun Markdown hover tooltip.
    */
-  public buildHoverMessage(blame: BlameInfo): vscode.MarkdownString {
+  public buildHoverMessage(
+    blame: BlameInfo,
+    hoverDateFormat: string = "DD/MM/YYYY HH:mm",
+  ): vscode.MarkdownString {
     const md = new vscode.MarkdownString(undefined, true);
     md.supportThemeIcons = true;
     md.isTrusted = true;
@@ -141,7 +144,7 @@ export class DecorationManager {
     }
 
     const timeAgo = formatRelativeTime(blame.authorDate);
-    const exactDate = formatAbsoluteDate(blame.authorDate);
+    const exactDate = formatCustomDate(blame.authorDate, hoverDateFormat);
 
     md.appendMarkdown(`### $(eye) Git Glance\n\n`);
     md.appendMarkdown(

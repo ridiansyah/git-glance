@@ -256,6 +256,10 @@ export class GlanceController {
         "dateStyle",
         "relative",
       ),
+      hoverDateFormat: wsConfig.get<string>(
+        "hoverDateFormat",
+        "DD/MM/YYYY HH:mm",
+      ),
       delay: wsConfig.get<number>("delay", 100),
       showHover: wsConfig.get<boolean>("showHover", true),
     };

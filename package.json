@@ -2,7 +2,7 @@
   "name": "git-glance",
   "displayName": "Git Glance",
   "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "ridiansyah",
   "author": {
     "name": "Wahyu Ridiansyah",
@@ -178,6 +178,11 @@
           ],
           "default": "relative",
           "description": "Style for the commit date (e.g. '3 days ago', '2026-09-28', 'Sep 28')."
+        },
+        "gitGlance.hoverDateFormat": {
+          "type": "string",
+          "default": "DD/MM/YYYY HH:mm",
+          "description": "Format for the exact commit date shown in hover tooltip. Tokens: YYYY, YY, MMMM, MMM, MM, M, DD, D, dddd, ddd, HH, H, hh, h, mm, m, ss, s, A, a, and [escaped text]."
         },
         "gitGlance.delay": {
           "type": "number",
