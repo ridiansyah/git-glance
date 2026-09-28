@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+*.vsix
+.DS_Store
+
+# Agents
+.agents
+
+# Design assets
+images/icon.pxd
+*.pxd

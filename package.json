@@ -1,0 +1,211 @@
+{
+  "name": "git-glance",
+  "displayName": "Git Glance",
+  "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
+  "version": "1.0.0",
+  "publisher": "ridiansyah",
+  "author": {
+    "name": "Wahyu Ridiansyah",
+    "url": "https://github.com/ridiansyah"
+  },
+  "icon": "images/icon.png",
+  "homepage": "https://github.com/ridiansyah/git-glance#readme",
+  "bugs": {
+    "url": "https://github.com/ridiansyah/git-glance/issues"
+  },
+  "qna": "marketplace",
+  "galleryBanner": {
+    "color": "#181825",
+    "theme": "dark"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "Git Glance only reads local git information."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Git Glance requires a local git repository."
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ridiansyah/git-glance"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "blame",
+    "gitlens",
+    "inline blame",
+    "author",
+    "git-glance",
+    "gitblame",
+    "git blame",
+    "gitlens alternative",
+    "git glance"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitGlance.toggle",
+        "title": "Git Glance: Toggle Inline Blame",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "gitGlance.toggleAvatar",
+        "title": "Git Glance: Toggle Avatar",
+        "icon": "$(account)"
+      },
+      {
+        "command": "gitGlance.copyHash",
+        "title": "Git Glance: Copy Commit Hash",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "gitGlance.showCommitDetails",
+        "title": "Git Glance: Show Commit Details",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "gitGlance.openOnRemote",
+        "title": "Git Glance: Open Commit on Remote (GitHub/GitLab)",
+        "icon": "$(globe)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "gitGlance.toggle"
+        },
+        {
+          "command": "gitGlance.toggleAvatar"
+        },
+        {
+          "command": "gitGlance.copyHash"
+        },
+        {
+          "command": "gitGlance.showCommitDetails"
+        },
+        {
+          "command": "gitGlance.openOnRemote"
+        }
+      ]
+    },
+    "colors": [
+      {
+        "id": "gitGlance.inlineColor",
+        "description": "Color for the inline blame text.",
+        "defaults": {
+          "dark": "#88888888",
+          "light": "#66666688",
+          "highContrast": "#ffffff99"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Git Glance",
+      "properties": {
+        "gitGlance.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable inline blame annotations."
+        },
+        "gitGlance.preset": {
+          "type": "string",
+          "enum": [
+            "default",
+            "minimalist",
+            "playful",
+            "terminal",
+            "github",
+            "breadcrumb",
+            "bento",
+            "comment",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "Default: (avatar) Author committed 3 days ago: Message",
+            "Minimalist: · Author, 3d ago — Message",
+            "Playful: 👀 Author, 3 days ago • 🚀 Message",
+            "Terminal: // git:author @ hash (3d) \"Message\"",
+            "GitHub: @author committed 3d ago: Message",
+            "Breadcrumb: › Author › 3d ago › Message",
+            "Bento: ⚡ Author │ ⏱️ 3d ago │ 💬 Message",
+            "Comment: /* by Author, 3d ago: Message */",
+            "Custom: Freely customized via gitGlance.format"
+          ],
+          "default": "default",
+          "description": "Choose a preset style, or select 'custom' to freely design your own format."
+        },
+        "gitGlance.showAvatar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show profile picture / avatar next to inline annotation. When disabled, only text is shown."
+        },
+        "gitGlance.prefix": {
+          "type": "string",
+          "default": "👀 ",
+          "description": "Prefix emoji or text token (available as ${prefix} in custom format)."
+        },
+        "gitGlance.format": {
+          "type": "string",
+          "default": "${author} committed ${time}: ${message}",
+          "description": "Custom inline template (when preset is 'custom'). Tokens: ${author}, ${time}, ${date}, ${isoDate}, ${message}, ${hash}, ${shortHash}, ${fullHash}, ${email}, ${authorEmail}, ${prefix}."
+        },
+        "gitGlance.uncommittedFormat": {
+          "type": "string",
+          "default": "You: uncommitted changes",
+          "description": "Custom uncommitted line template (when preset is 'custom'). Tokens: ${author}, ${message}, ${prefix}, ${time}."
+        },
+        "gitGlance.dateStyle": {
+          "type": "string",
+          "enum": [
+            "relative",
+            "absolute",
+            "short"
+          ],
+          "default": "relative",
+          "description": "Style for the commit date (e.g. '3 days ago', '2026-09-28', 'Sep 28')."
+        },
+        "gitGlance.delay": {
+          "type": "number",
+          "default": 100,
+          "description": "Debounce delay in milliseconds before fetching git blame after moving cursor."
+        },
+        "gitGlance.showHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show rich commit information tooltip when hovering over the inline annotation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run package",
+    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "package": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify",
+    "package:vsix": "vsce package --no-git-tag-version",
+    "test": "esbuild ./src/test/unit.test.ts --bundle --outfile=dist/test.js --platform=node && node --test dist/test.js",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.20.1",
+    "typescript": "^5.3.3"
+  }
+}
