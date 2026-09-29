@@ -175,6 +175,8 @@ Customize the exact timestamp displayed in the hover card tooltip using these to
 
 ### Option 1: Install from VS Code Marketplace (Recommended)
 
+Install directly from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance) or from within VS Code:
+
 1. Open the **Extensions** view in VS Code (`Cmd + Shift + X` on macOS, `Ctrl + Shift + X` on Windows/Linux).
 2. Search for **`Git Glance`**.
 3. Click **Install**.
