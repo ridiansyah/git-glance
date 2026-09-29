@@ -1,4 +1,4 @@
-# Git Glance
+<h1 align="center">Git Glance</h1>
 
 <p align="center">
   <strong>Super lightweight, clean, and fun inline Git blame for Visual Studio Code.</strong>
