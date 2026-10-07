@@ -7,8 +7,10 @@ import { BlameInfo, GitGlanceConfig, GlancePreset } from "./types";
 export class GlanceController {
   private config: GitGlanceConfig;
   private debounceTimer: NodeJS.Timeout | undefined;
+  private activeAbortController: AbortController | undefined;
   private currentBlame: BlameInfo | null = null;
   private currentLine: number = -1;
+  private lastEditor?: vscode.TextEditor;
   private avatarDisposable?: { dispose: () => void };
 
   constructor(
@@ -102,6 +104,18 @@ export class GlanceController {
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+      this.debounceTimer = undefined;
+    }
+
+    // Zero-debounce instant render if line blame is already cached in memory
+    const document = editor.document;
+    if (
+      !document.isUntitled &&
+      document.uri.scheme === "file" &&
+      this.gitService.hasCachedBlame(document.fileName, document.version, line)
+    ) {
+      this.updateBlame(editor);
+      return;
     }
 
     this.debounceTimer = setTimeout(() => {
@@ -110,6 +124,10 @@ export class GlanceController {
   }
 
   public onActiveEditorChange(editor: vscode.TextEditor | undefined) {
+    if (this.lastEditor && this.lastEditor !== editor) {
+      this.decorationManager.clear(this.lastEditor);
+    }
+    this.lastEditor = editor;
     this.currentLine = -1;
     this.currentBlame = null;
     if (!editor || !this.config.enabled) {
@@ -124,6 +142,13 @@ export class GlanceController {
     if (activeEditor && activeEditor.document === document) {
       this.updateBlame(activeEditor, true);
     }
+  }
+
+  public onDocumentClose(document: vscode.TextDocument) {
+    if (this.lastEditor && this.lastEditor.document === document) {
+      this.lastEditor = undefined;
+    }
+    this.gitService.clearCache(document.fileName);
   }
 
   public onDocumentChange(event: vscode.TextDocumentChangeEvent) {
@@ -148,6 +173,7 @@ export class GlanceController {
       this.currentBlame = null;
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
+        this.debounceTimer = undefined;
       }
       this.debounceTimer = setTimeout(() => {
         this.updateBlame(editor, true);
@@ -179,13 +205,32 @@ export class GlanceController {
 
     this.currentLine = line;
 
+    // Abort previous in-flight git process
+    if (this.activeAbortController) {
+      this.activeAbortController.abort();
+      this.activeAbortController = undefined;
+    }
+
+    const abortController = new AbortController();
+    this.activeAbortController = abortController;
+
     const blame = await this.gitService.getBlameForLine(
       document.fileName,
       line,
       document.version,
       document.getText(),
       document.isDirty,
+      document.lineCount,
+      abortController.signal,
     );
+
+    if (this.activeAbortController === abortController) {
+      this.activeAbortController = undefined;
+    }
+
+    if (abortController.signal.aborted) {
+      return;
+    }
 
     // Verify editor & line haven't changed while waiting for async blame
     if (
@@ -231,6 +276,11 @@ export class GlanceController {
   public dispose() {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+      this.debounceTimer = undefined;
+    }
+    if (this.activeAbortController) {
+      this.activeAbortController.abort();
+      this.activeAbortController = undefined;
     }
     if (this.avatarDisposable) {
       this.avatarDisposable.dispose();

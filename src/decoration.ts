@@ -4,21 +4,49 @@ import { formatRelativeTime, formatCustomDate } from "./utils/date";
 import { formatInlineText, escapeMarkdown } from "./utils/format";
 
 export class DecorationManager {
-  private avatarDecorationType: vscode.TextEditorDecorationType | undefined;
-  private textDecorationType: vscode.TextEditorDecorationType | undefined;
+  private avatarDecorationType: vscode.TextEditorDecorationType;
+  private textDecorationType: vscode.TextEditorDecorationType;
+
+  constructor() {
+    this.avatarDecorationType = this.createAvatarDecorationType();
+    this.textDecorationType = this.createTextDecorationType();
+  }
+
+  private createAvatarDecorationType(): vscode.TextEditorDecorationType {
+    return vscode.window.createTextEditorDecorationType({
+      after: {
+        width: "14px",
+        height: "14px",
+        margin: "0 6px 0 3em",
+        textDecoration: "none; vertical-align: middle",
+      },
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    });
+  }
+
+  private createTextDecorationType(): vscode.TextEditorDecorationType {
+    return vscode.window.createTextEditorDecorationType({
+      after: {
+        color: new vscode.ThemeColor("gitGlance.inlineColor"),
+        fontStyle: "normal",
+        textDecoration: "none; vertical-align: middle",
+      },
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    });
+  }
 
   public recreateDecorationType() {
     this.dispose();
+    this.avatarDecorationType = this.createAvatarDecorationType();
+    this.textDecorationType = this.createTextDecorationType();
   }
 
   public dispose() {
     if (this.avatarDecorationType) {
       this.avatarDecorationType.dispose();
-      this.avatarDecorationType = undefined;
     }
     if (this.textDecorationType) {
       this.textDecorationType.dispose();
-      this.textDecorationType = undefined;
     }
   }
 
@@ -31,9 +59,6 @@ export class DecorationManager {
     config: GitGlanceConfig,
     avatarUri?: vscode.Uri | null,
   ) {
-    // 1. Dispose old decoration types before creating fresh ones
-    this.dispose();
-
     if (blame.line < 0 || blame.line >= editor.document.lineCount) {
       return;
     }
@@ -58,7 +83,7 @@ export class DecorationManager {
       ? this.buildHoverMessage(blame, config.hoverDateFormat)
       : undefined;
 
-    // 2. Dual-decoration architecture:
+    // Dual-decoration architecture:
     // Both avatar and text decorations are attached using `after:` on line.range.end
     // with `DecorationRangeBehavior.ClosedClosed`.
     // Because both are in `after:`, the caret at line.range.end sits strictly BEFORE
@@ -66,40 +91,32 @@ export class DecorationManager {
     // where clicking code or pressing End caused the cursor to jump to the right of the avatar!
 
     if (hasAvatar && avatarUri) {
-      this.avatarDecorationType = vscode.window.createTextEditorDecorationType({
-        after: {
-          contentIconPath: avatarUri,
-          width: "14px",
-          height: "14px",
-          margin: "0 6px 0 3em",
-          textDecoration: "none; vertical-align: middle",
+      editor.setDecorations(this.avatarDecorationType, [
+        {
+          range,
+          renderOptions: {
+            after: {
+              contentIconPath: avatarUri,
+            },
+          },
         },
-        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-      });
-
-      const avatarOptions: vscode.DecorationOptions = {
-        range,
-      };
-      editor.setDecorations(this.avatarDecorationType, [avatarOptions]);
+      ]);
+    } else {
+      editor.setDecorations(this.avatarDecorationType, []);
     }
 
-    this.textDecorationType = vscode.window.createTextEditorDecorationType({
-      after: {
-        contentText: inlineText,
-        margin: hasAvatar ? "0" : "0 0 0 3em",
-        color: new vscode.ThemeColor("gitGlance.inlineColor"),
-        fontStyle: "normal",
-        textDecoration: "none; vertical-align: middle",
+    editor.setDecorations(this.textDecorationType, [
+      {
+        range,
+        hoverMessage,
+        renderOptions: {
+          after: {
+            contentText: inlineText,
+            margin: hasAvatar ? "0" : "0 0 0 3em",
+          },
+        },
       },
-      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-    });
-
-    const textOptions: vscode.DecorationOptions = {
-      range,
-      hoverMessage,
-    };
-
-    editor.setDecorations(this.textDecorationType, [textOptions]);
+    ]);
   }
 
   /**
@@ -108,13 +125,9 @@ export class DecorationManager {
   public clear(editor: vscode.TextEditor) {
     if (this.avatarDecorationType) {
       editor.setDecorations(this.avatarDecorationType, []);
-      this.avatarDecorationType.dispose();
-      this.avatarDecorationType = undefined;
     }
     if (this.textDecorationType) {
       editor.setDecorations(this.textDecorationType, []);
-      this.textDecorationType.dispose();
-      this.textDecorationType = undefined;
     }
   }
 

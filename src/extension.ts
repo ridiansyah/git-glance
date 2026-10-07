@@ -41,6 +41,10 @@ export function activate(context: vscode.ExtensionContext) {
       controller?.onDocumentSave(document);
     }),
 
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      controller?.onDocumentClose(document);
+    }),
+
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("gitGlance")) {
         controller?.reloadConfig();

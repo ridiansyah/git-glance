@@ -8,8 +8,8 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://badgen.net/vs-marketplace/v/ridiansyah.git-glance" alt="VS Code Marketplace"></a>
   <a href="https://github.com/ridiansyah/git-glance/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/vscode-%5E1.85.0-blue.svg" alt="VS Code Version">
-  <img src="https://img.shields.io/badge/bundle%20size-%7E21%20KB-brightgreen.svg" alt="Bundle Size">
-  <img src="https://img.shields.io/badge/package%20size-%3C%2030%20KB-brightgreen.svg" alt="Package Size">
+  <img src="https://img.shields.io/badge/bundle%20size-%7E25%20KB-brightgreen.svg" alt="Bundle Size">
+  <img src="https://img.shields.io/badge/package%20size-%3C%2032%20KB-brightgreen.svg" alt="Package Size">
   <a href="https://github.com/ridiansyah/git-glance/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -29,24 +29,26 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 ### 🏎️ Comparison: Git Glance vs. Heavy Git Suites
 
-| Feature / Metric           | ⚡ Git Glance                           | Heavy Git Extensions (e.g. GitLens)        |
-| :------------------------- | :-------------------------------------- | :----------------------------------------- |
-| **Package Size (VSIX)**    | **~31 KB**                              | **~25 - 40 MB** (~1000× larger)            |
-| **Minified Bundle**        | **~23 KB**                              | **~5 - 10 MB**                             |
-| **Runtime Dependencies**   | **0** (Zero external dependencies)      | Dozens of npm packages                     |
-| **Startup Impact**         | **0 ms** (`onStartupFinished`)          | Often adds noticeable startup delay        |
-| **Blame Execution**        | **Targeted 1-line blame** (`-L n,n`)    | Full-file / repository indexing            |
-| **Memory Footprint (RAM)** | **< 15 MB** (bounded LRU cache)         | Up to 100+ MB                              |
-| **Telemetry & Accounts**   | **100% Private, zero accounts/sign-in** | Requires accounts, cloud sync, telemetry   |
-| **Focus & Feel**           | **Distraction-free inline annotations** | Heavy sidebars, revision trees, git graphs |
+| Feature / Metric           | ⚡ Git Glance                                                                                            | Heavy Git Extensions (e.g. GitLens)        |
+| :------------------------- | :------------------------------------------------------------------------------------------------------ | :----------------------------------------- |
+| **Package Size (VSIX)**    | **~31 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
+| **Minified Bundle**        | **~25 KB**                                                                                              | **~5 - 10 MB**                             |
+| **Runtime Dependencies**   | **0** (Zero external dependencies)                                                                      | Dozens of npm packages                     |
+| **Startup Impact**         | **0 ms** (`onStartupFinished`)                                                                          | Often adds noticeable startup delay        |
+| **Blame Execution**        | **Hybrid blame** (0ms instant in-memory cache for clean files + targeted 1-line for dirty/large files)    | Full-file / repository indexing            |
+| **Memory Footprint (RAM)** | **< 15 MB** (bounded LRU cache)                                                                         | Up to 100+ MB                              |
+| **Telemetry & Accounts**   | **100% Private, zero accounts/sign-in**                                                                 | Requires accounts, cloud sync, telemetry   |
+| **Focus & Feel**           | **Distraction-free inline annotations**                                                                 | Heavy sidebars, revision trees, git graphs |
 
 ---
 
 ## ✨ Features
 
-- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~21 KB file with zero runtime dependencies.
+- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~25 KB file with zero runtime dependencies.
+- **⚡ Instant 0ms Lookups & Zero-Debounce**: Clean saved files are blamed once and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
+- **🛡️ Process Cancellation & Zero DOM Churn**: Automatically aborts obsolete in-flight Git processes on fast cursor navigation and reuses persistent decoration types to eliminate Monaco stylesheet churn.
 - **👀 Subdued Inline Annotation**: Appears gracefully at the end of the active cursor line with subtle, theme-adaptive coloring.
-- **✨ Uncommitted Line Detection**: Detects uncommitted and newly added lines seamlessly (`✨ You • Uncommitted changes`).
+- **✨ Uncommitted Line Detection**: Detects uncommitted and newly added lines seamlessly (`You, 3 hours ago: Uncommitted changes`).
 - **💬 Rich Interactive Hover Card**: Hovering over the annotation displays an elegant card with:
   - Author name, email, and exact commit timestamp.
   - Short commit SHA.

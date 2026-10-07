@@ -4,6 +4,21 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-10-07
+
+### Added
+
+- **Hybrid Whole-File Blame & In-Memory Caching**: Clean saved documents ($\le 2500$ lines) are blamed once and parsed into an in-memory map in a single pass (~7ms), resolving all subsequent line navigations in **0ms (instant memory lookup)** with zero spawned Git processes.
+- **Zero-Debounce on Cache Hit**: Cursor movements on cached lines render inline blame instantly without waiting for the 100ms debounce timer.
+- **In-Flight Process Cancellation (`AbortController`)**: Rapid cursor navigation automatically terminates obsolete pending `git blame` subprocesses (`SIGTERM`), preventing background process queuing and saving CPU/battery.
+- **Document Close Cache Eviction**: File blame caches are automatically purged when closing editor tabs (`onDidCloseTextDocument`), ensuring a lean memory footprint.
+
+### Changed
+
+- **Persistent Decoration Type Architecture**: Refactored `DecorationManager` to reuse persistent `TextEditorDecorationType` instances and apply dynamic content (`contentText`, `contentIconPath`, and `margin`) via `renderOptions.after`. Eliminates Monaco stylesheet churn and extension host IPC overhead.
+
+---
+
 ## [1.1.2] - 2026-09-28
 
 ### Added

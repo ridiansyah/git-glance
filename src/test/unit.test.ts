@@ -369,3 +369,91 @@ test("AvatarService - Initials and SVG generation", () => {
   const keyUncommitted = avatarService.getAvatarKey("You", "", true);
   assert.strictEqual(keyUncommitted, "__you__");
 });
+
+test("GitService - parsePorcelain multi-line and single-line stream parsing", () => {
+  const gitService = new GitService();
+
+  // 1. Single-line porcelain mock
+  const singleLineOutput = `9b595a4235b06f7ee62071b568e833672ec06295 1 1 1
+author Wahyu Ridiansyah
+author-mail <wahyuridiansyah@gmail.com>
+author-time 1790599131
+author-tz +0700
+committer Wahyu Ridiansyah
+committer-mail <wahyuridiansyah@gmail.com>
+committer-time 1790599131
+committer-tz +0700
+summary Initial commit
+filename package.json
+\t{`;
+
+  const singleResult = gitService.parsePorcelain(singleLineOutput, "/mock/repo");
+  assert.strictEqual(singleResult.size, 1);
+  const blame0 = singleResult.get(0);
+  assert.ok(blame0);
+  assert.strictEqual(blame0.sha, "9b595a4235b06f7ee62071b568e833672ec06295");
+  assert.strictEqual(blame0.author, "Wahyu Ridiansyah");
+  assert.strictEqual(blame0.authorEmail, "wahyuridiansyah@gmail.com");
+  assert.strictEqual(blame0.summary, "Initial commit");
+  assert.strictEqual(blame0.line, 0);
+  assert.strictEqual(blame0.isUncommitted, false);
+
+  // 2. Multi-line porcelain with shared commits
+  const multiLineOutput = `9b595a4235b06f7ee62071b568e833672ec06295 1 1 2
+author Wahyu Ridiansyah
+author-mail <wahyuridiansyah@gmail.com>
+author-time 1790599131
+author-tz +0700
+committer Wahyu Ridiansyah
+committer-mail <wahyuridiansyah@gmail.com>
+committer-time 1790599131
+committer-tz +0700
+summary Initial commit
+filename test.ts
+\tline 1
+9b595a4235b06f7ee62071b568e833672ec06295 2 2
+\tline 2
+0000000000000000000000000000000000000000 3 3 1
+author Not Committed Yet
+author-mail <not.committed.yet>
+author-time 1790600000
+author-tz +0700
+committer Not Committed Yet
+committer-mail <not.committed.yet>
+committer-time 1790600000
+committer-tz +0700
+summary Version of test.ts
+filename test.ts
+\tline 3`;
+
+  const multiResult = gitService.parsePorcelain(multiLineOutput, "/mock/repo");
+  assert.strictEqual(multiResult.size, 3);
+
+  // Line 0 (finalLine 0)
+  const l0 = multiResult.get(0);
+  assert.ok(l0);
+  assert.strictEqual(l0.sha, "9b595a4235b06f7ee62071b568e833672ec06295");
+  assert.strictEqual(l0.summary, "Initial commit");
+
+  // Line 1 (finalLine 1, reused sha without repeated headers)
+  const l1 = multiResult.get(1);
+  assert.ok(l1);
+  assert.strictEqual(l1.sha, "9b595a4235b06f7ee62071b568e833672ec06295");
+  assert.strictEqual(l1.author, "Wahyu Ridiansyah");
+  assert.strictEqual(l1.summary, "Initial commit");
+
+  // Line 2 (uncommitted)
+  const l2 = multiResult.get(2);
+  assert.ok(l2);
+  assert.strictEqual(l2.isUncommitted, true);
+  assert.strictEqual(l2.author, "You");
+  assert.strictEqual(l2.summary, "Uncommitted changes");
+});
+
+test("GitService - hasCachedBlame and clearCache", () => {
+  const gitService = new GitService();
+  assert.strictEqual(
+    gitService.hasCachedBlame("/mock/file.ts", 1, 10),
+    false,
+  );
+});

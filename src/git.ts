@@ -10,7 +10,7 @@ export class GitService {
   private currentUserEmailCache = new Map<string, string | null>();
 
   /**
-   * Clears the blame cache (e.g. on file save or document change).
+   * Clears the blame cache (e.g. on file save, document change, or file close).
    */
   public clearCache(filePath?: string) {
     if (filePath) {
@@ -36,6 +36,18 @@ export class GitService {
   }
 
   /**
+   * Checks whether the blame for the given file, version, and line is already cached.
+   */
+  public hasCachedBlame(
+    filePath: string,
+    documentVersion: number,
+    line: number,
+  ): boolean {
+    const cacheKey = `${filePath}:${documentVersion}:${line}`;
+    return this.blameCache.has(cacheKey);
+  }
+
+  /**
    * Finds the root directory of the Git repository for a given file.
    */
   public async getRepoRoot(filePath: string): Promise<string | null> {
@@ -56,16 +68,9 @@ export class GitService {
   }
 
   /**
-   * Retrieves remote web URL for a commit (e.g. GitHub/GitLab).
+   * Retrieves remote base URL (e.g. origin remote) for a repository root.
    */
-  public async getRemoteCommitUrl(
-    repoRoot: string,
-    sha: string,
-  ): Promise<string | null> {
-    if (sha.replace(/0/g, "").length === 0) {
-      return null;
-    }
-
+  public async getRemoteBaseUrl(repoRoot: string): Promise<string | null> {
     if (!this.remoteUrlCache.has(repoRoot)) {
       try {
         const rawRemote = (
@@ -76,8 +81,21 @@ export class GitService {
         this.remoteUrlCache.set(repoRoot, null);
       }
     }
+    return this.remoteUrlCache.get(repoRoot) ?? null;
+  }
 
-    const remote = this.remoteUrlCache.get(repoRoot);
+  /**
+   * Retrieves remote web URL for a commit (e.g. GitHub/GitLab).
+   */
+  public async getRemoteCommitUrl(
+    repoRoot: string,
+    sha: string,
+  ): Promise<string | null> {
+    if (sha.replace(/0/g, "").length === 0) {
+      return null;
+    }
+
+    const remote = await this.getRemoteBaseUrl(repoRoot);
     if (!remote) {
       return null;
     }
@@ -89,7 +107,6 @@ export class GitService {
    * Converts a git remote URL into a web commit URL.
    */
   public formatCommitWebUrl(remoteUrl: string, sha: string): string | null {
-    // Standardize git@host:owner/repo.git or https://host/owner/repo.git
     let clean = remoteUrl.trim();
     if (clean.endsWith(".git")) {
       clean = clean.slice(0, -4);
@@ -118,7 +135,7 @@ export class GitService {
   }
 
   /**
-   * Blames a specific line (0-indexed).
+   * Blames a specific line (0-indexed) with hybrid full-file caching and process cancellation.
    */
   public async getBlameForLine(
     filePath: string,
@@ -126,70 +143,152 @@ export class GitService {
     documentVersion: number,
     documentText?: string,
     isDirty: boolean = false,
+    lineCount?: number,
+    signal?: AbortSignal,
   ): Promise<BlameInfo | null> {
     const cacheKey = `${filePath}:${documentVersion}:${line}`;
     if (this.blameCache.has(cacheKey)) {
       return this.blameCache.get(cacheKey)!;
     }
 
-    const repoRoot = await this.getRepoRoot(filePath);
-    if (!repoRoot) {
+    if (signal?.aborted) {
       return null;
     }
 
-    const lineNum = line + 1; // 1-indexed for git
-    const args = ["blame"];
-
-    if (isDirty && documentText !== undefined) {
-      args.push("--contents", "-");
+    const repoRoot = await this.getRepoRoot(filePath);
+    if (!repoRoot || signal?.aborted) {
+      return null;
     }
 
-    args.push("-L", `${lineNum},${lineNum}`, "--porcelain", "--", filePath);
+    const shouldBlameFullFile =
+      !isDirty && lineCount !== undefined && lineCount <= 2500;
 
     try {
-      const output = await this.execGit(
-        args,
-        repoRoot,
-        isDirty && documentText !== undefined ? documentText : undefined,
-      );
+      const [currentUserEmail, rawRemote] = await Promise.all([
+        this.getCurrentUserEmail(repoRoot),
+        this.getRemoteBaseUrl(repoRoot),
+      ]);
 
-      const blame = this.parsePorcelain(output, line, repoRoot);
-      if (blame) {
-        if (blame.isUncommitted && !isDirty) {
-          try {
-            const stat = await fs.promises.stat(filePath);
-            blame.authorDate = stat.mtime;
-            blame.committerDate = stat.mtime;
-          } catch {
-            // Keep default timestamp
-          }
-        }
-
-        const [remoteUrl, currentUserEmail] = await Promise.all([
-          this.getRemoteCommitUrl(repoRoot, blame.sha),
-          this.getCurrentUserEmail(repoRoot),
-        ]);
-
-        if (remoteUrl) {
-          blame.remoteCommitUrl = remoteUrl;
-        }
-
-        blame.isCurrentUser =
-          blame.isUncommitted ||
-          this.isCurrentUser(blame.authorEmail, currentUserEmail);
-
-        if (this.blameCache.size >= 500) {
-          const oldestKey = this.blameCache.keys().next().value;
-          if (oldestKey) {
-            this.blameCache.delete(oldestKey);
-          }
-        }
-        this.blameCache.set(cacheKey, blame);
+      if (signal?.aborted) {
+        return null;
       }
-      return blame;
+
+      if (shouldBlameFullFile) {
+        const output = await this.execGit(
+          ["blame", "--porcelain", "--", filePath],
+          repoRoot,
+          undefined,
+          signal,
+        );
+
+        if (signal?.aborted) {
+          return null;
+        }
+
+        const map = this.parsePorcelain(output, repoRoot);
+        let fileMtime: Date | undefined;
+
+        for (const blame of map.values()) {
+          if (blame.isUncommitted && !isDirty) {
+            if (!fileMtime) {
+              try {
+                const stat = await fs.promises.stat(filePath);
+                fileMtime = stat.mtime;
+              } catch {
+                // Keep default timestamp
+              }
+            }
+            if (fileMtime) {
+              blame.authorDate = fileMtime;
+              blame.committerDate = fileMtime;
+            }
+          }
+
+          blame.isCurrentUser =
+            blame.isUncommitted ||
+            this.isCurrentUser(blame.authorEmail, currentUserEmail);
+
+          if (rawRemote && !blame.isUncommitted) {
+            const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
+            if (remoteUrl) {
+              blame.remoteCommitUrl = remoteUrl;
+            }
+          }
+
+          this.setBlameCache(
+            `${filePath}:${documentVersion}:${blame.line}`,
+            blame,
+          );
+        }
+
+        return map.get(line) ?? null;
+      } else {
+        const lineNum = line + 1; // 1-indexed for git
+        const args = ["blame"];
+
+        if (isDirty && documentText !== undefined) {
+          args.push("--contents", "-");
+        }
+
+        args.push("-L", `${lineNum},${lineNum}`, "--porcelain", "--", filePath);
+
+        const output = await this.execGit(
+          args,
+          repoRoot,
+          isDirty && documentText !== undefined ? documentText : undefined,
+          signal,
+        );
+
+        if (signal?.aborted) {
+          return null;
+        }
+
+        const map = this.parsePorcelain(output, repoRoot);
+        const blame = map.get(line) ?? map.values().next().value;
+
+        if (blame) {
+          if (blame.isUncommitted && !isDirty) {
+            try {
+              const stat = await fs.promises.stat(filePath);
+              blame.authorDate = stat.mtime;
+              blame.committerDate = stat.mtime;
+            } catch {
+              // Keep default timestamp
+            }
+          }
+
+          blame.isCurrentUser =
+            blame.isUncommitted ||
+            this.isCurrentUser(blame.authorEmail, currentUserEmail);
+
+          if (rawRemote && !blame.isUncommitted) {
+            const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
+            if (remoteUrl) {
+              blame.remoteCommitUrl = remoteUrl;
+            }
+          }
+
+          this.setBlameCache(cacheKey, blame);
+        }
+
+        return blame ?? null;
+      }
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Sets blame into memory cache with LRU eviction guard.
+   */
+  private setBlameCache(key: string, blame: BlameInfo) {
+    if (this.blameCache.size >= 5000) {
+      const oldestKey = this.blameCache.keys().next().value;
+      if (oldestKey) {
+        this.blameCache.delete(oldestKey);
+      }
+    }
+    this.blameCache.set(key, blame);
   }
 
   /**
@@ -271,104 +370,146 @@ export class GitService {
   }
 
   /**
-   * Parses `git blame --porcelain` single line output.
+   * Parses `git blame --porcelain` stream output for single or multiple lines.
    */
-  private parsePorcelain(
+  public parsePorcelain(
     output: string,
-    line: number,
     repoRoot: string,
-  ): BlameInfo | null {
+  ): Map<number, BlameInfo> {
+    const result = new Map<number, BlameInfo>();
     const lines = output.split("\n");
     if (lines.length === 0 || !lines[0]) {
-      return null;
+      return result;
     }
 
-    const firstLineParts = lines[0].trim().split(/\s+/);
-    const sha = firstLineParts[0];
-    if (!sha) {
-      return null;
+    interface CommitMeta {
+      sha: string;
+      author: string;
+      authorEmail: string;
+      authorTime: number;
+      authorTimeZone: string;
+      committer: string;
+      committerEmail: string;
+      committerTime: number;
+      summary: string;
+      isUncommitted: boolean;
     }
 
-    const isUncommitted = sha.replace(/0/g, "").length === 0;
+    const commitMap = new Map<string, CommitMeta>();
+    let i = 0;
 
-    let author = "Unknown";
-    let authorEmail = "";
-    let authorTime = Math.floor(Date.now() / 1000);
-    let authorTimeZone = "";
-    let committer = "Unknown";
-    let committerEmail = "";
-    let committerTime = Math.floor(Date.now() / 1000);
-    let summary = "";
-
-    for (let i = 1; i < lines.length; i++) {
-      const current = lines[i];
-      if (current.startsWith("\t")) {
-        break;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line) {
+        i++;
+        continue;
       }
 
-      if (current.startsWith("author ")) {
-        author = current.substring("author ".length).trim();
-      } else if (current.startsWith("author-mail ")) {
-        authorEmail = current
-          .substring("author-mail ".length)
-          .replace(/[<>]/g, "")
-          .trim();
-      } else if (current.startsWith("author-time ")) {
-        authorTime = parseInt(
-          current.substring("author-time ".length).trim(),
-          10,
-        );
-      } else if (current.startsWith("author-tz ")) {
-        authorTimeZone = current.substring("author-tz ".length).trim();
-      } else if (current.startsWith("committer ")) {
-        committer = current.substring("committer ".length).trim();
-      } else if (current.startsWith("committer-mail ")) {
-        committerEmail = current
-          .substring("committer-mail ".length)
-          .replace(/[<>]/g, "")
-          .trim();
-      } else if (current.startsWith("committer-time ")) {
-        committerTime = parseInt(
-          current.substring("committer-time ".length).trim(),
-          10,
-        );
-      } else if (current.startsWith("summary ")) {
-        summary = current.substring("summary ".length).trim();
+      const parts = line.split(" ");
+      if (parts.length >= 3 && parts[0].length === 40) {
+        const sha = parts[0];
+        const finalLine = parseInt(parts[2], 10) - 1; // 0-based
+        i++;
+
+        let meta = commitMap.get(sha);
+        if (!meta) {
+          const isUncommitted = sha.replace(/0/g, "").length === 0;
+          meta = {
+            sha,
+            author: isUncommitted ? "You" : "Unknown",
+            authorEmail: "",
+            authorTime: Math.floor(Date.now() / 1000),
+            authorTimeZone: "",
+            committer: isUncommitted ? "You" : "Unknown",
+            committerEmail: "",
+            committerTime: Math.floor(Date.now() / 1000),
+            summary: isUncommitted ? "Uncommitted changes" : "",
+            isUncommitted,
+          };
+
+          while (i < lines.length && !lines[i].startsWith("\t")) {
+            const header = lines[i];
+            if (header.startsWith("author ")) {
+              if (!meta.isUncommitted) {
+                meta.author = header.substring(7).trim();
+              }
+            } else if (header.startsWith("author-mail ")) {
+              meta.authorEmail = header
+                .substring(12)
+                .replace(/[<>]/g, "")
+                .trim();
+            } else if (header.startsWith("author-time ")) {
+              meta.authorTime = parseInt(header.substring(12).trim(), 10);
+            } else if (header.startsWith("author-tz ")) {
+              meta.authorTimeZone = header.substring(10).trim();
+            } else if (header.startsWith("committer ")) {
+              if (!meta.isUncommitted) {
+                meta.committer = header.substring(10).trim();
+              }
+            } else if (header.startsWith("committer-mail ")) {
+              meta.committerEmail = header
+                .substring(15)
+                .replace(/[<>]/g, "")
+                .trim();
+            } else if (header.startsWith("committer-time ")) {
+              meta.committerTime = parseInt(header.substring(15).trim(), 10);
+            } else if (header.startsWith("summary ")) {
+              if (!meta.isUncommitted) {
+                meta.summary = header.substring(8).trim();
+              }
+            }
+            i++;
+          }
+          commitMap.set(sha, meta);
+        } else {
+          while (i < lines.length && !lines[i].startsWith("\t")) {
+            i++;
+          }
+        }
+
+        if (i < lines.length && lines[i].startsWith("\t")) {
+          i++;
+        }
+
+        result.set(finalLine, {
+          sha: meta.sha,
+          shortSha: meta.isUncommitted ? "0000000" : meta.sha.substring(0, 7),
+          author: meta.author,
+          authorEmail: meta.authorEmail,
+          authorDate: new Date(meta.authorTime * 1000),
+          authorTimeZone: meta.authorTimeZone,
+          committer: meta.committer,
+          committerEmail: meta.committerEmail,
+          committerDate: new Date(meta.committerTime * 1000),
+          summary: meta.summary,
+          line: finalLine,
+          isUncommitted: meta.isUncommitted,
+          isCurrentUser:
+            meta.isUncommitted || meta.author.toLowerCase() === "you",
+          repoRoot,
+        });
+      } else {
+        i++;
       }
     }
 
-    if (isUncommitted) {
-      author = "You";
-      summary = "Uncommitted changes";
-    }
-
-    return {
-      sha,
-      shortSha: isUncommitted ? "0000000" : sha.substring(0, 7),
-      author,
-      authorEmail,
-      authorDate: new Date(authorTime * 1000),
-      authorTimeZone,
-      committer,
-      committerEmail,
-      committerDate: new Date(committerTime * 1000),
-      summary,
-      line,
-      isUncommitted,
-      isCurrentUser: isUncommitted || author.toLowerCase() === "you",
-      repoRoot,
-    };
+    return result;
   }
 
   /**
-   * Helper to execute git command safely.
+   * Helper to execute git command safely with AbortSignal cancellation support.
    */
   private execGit(
     args: string[],
     cwd: string,
     stdin?: string,
+    signal?: AbortSignal,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(new Error("Git command aborted"));
+      }
+
       let isSettled = false;
       const proc = cp.spawn("git", args, {
         cwd,
@@ -379,9 +520,17 @@ export class GitService {
         },
       });
 
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
+        }
+      };
+
       const timer = setTimeout(() => {
         if (!isSettled) {
           isSettled = true;
+          cleanup();
           try {
             proc.kill();
           } catch {
@@ -390,6 +539,23 @@ export class GitService {
           reject(new Error(`Git command timed out: git ${args.join(" ")}`));
         }
       }, 5000);
+
+      const onAbort = () => {
+        if (!isSettled) {
+          isSettled = true;
+          cleanup();
+          try {
+            proc.kill();
+          } catch {
+            // ignore
+          }
+          reject(new Error("Git command aborted"));
+        }
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       let stdout = "";
       let stderr = "";
@@ -405,7 +571,7 @@ export class GitService {
       proc.on("error", (err) => {
         if (!isSettled) {
           isSettled = true;
-          clearTimeout(timer);
+          cleanup();
           reject(err);
         }
       });
@@ -413,7 +579,7 @@ export class GitService {
       proc.on("close", (code) => {
         if (!isSettled) {
           isSettled = true;
-          clearTimeout(timer);
+          cleanup();
           if (code === 0) {
             resolve(stdout);
           } else {

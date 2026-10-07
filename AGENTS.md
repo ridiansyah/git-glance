@@ -79,12 +79,13 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
 
 ### 3.1 Inline Annotation Style & Presets
 
-- **Dual-Decoration Architecture (`after:` only)**:
+- **Dual-Decoration Architecture (`after:` only & Reusable Types)**:
   - To prevent caret jumps or glitches when clicking code or pressing End, decorations **NEVER use `before:` on `line.range.end`**. Attaching `before:` on `Range(line.range.end, line.range.end)` causes Monaco to position `line.range.end` to the right of `before:`, causing the cursor to jump/shift past the avatar.
-  - Instead, Git Glance uses two decoupled `TextEditorDecorationType`s (`avatarDecorationType` and `textDecorationType`), **BOTH using `after:`** with `rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed` on `Range(line.range.end, line.range.end)`.
+  - Instead, Git Glance uses two persistent, reusable `TextEditorDecorationType`s (`avatarDecorationType` and `textDecorationType`), **BOTH using `after:`** with `rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed` on `Range(line.range.end, line.range.end)`.
+  - **No Decoration Type Churn**: `avatarDecorationType` and `textDecorationType` are created **once** upon initialization and never disposed/recreated per cursor movement. Dynamic properties (`contentText`, `contentIconPath`, and `margin`) are passed dynamically per-line via `editor.setDecorations(type, [{ range, hoverMessage, renderOptions: { after: ... } }])`. This completely eliminates Monaco style sheet rule regeneration and extension host IPC churn.
   - Because both decorations use `after:`, `line.range.end` remains strictly before both decorations, keeping the cursor pinned cleanly at the end of the code without jumping or shifting across the avatar.
-  - `avatarDecorationType`: `after: { contentIconPath: avatarUri, width: '14px', height: '14px', margin: '0 6px 0 3em', textDecoration: 'none; vertical-align: middle' }`.
-  - `textDecorationType`: `after: { contentText: inlineText, margin: hasAvatar ? '0' : '0 0 0 3em', color: new vscode.ThemeColor('gitGlance.inlineColor'), textDecoration: 'none; vertical-align: middle' }`.
+  - `avatarDecorationType`: `after: { width: '14px', height: '14px', margin: '0 6px 0 3em', textDecoration: 'none; vertical-align: middle' }`. Render options supply dynamic `contentIconPath: avatarUri`.
+  - `textDecorationType`: `after: { color: new vscode.ThemeColor('gitGlance.inlineColor'), fontStyle: 'normal', textDecoration: 'none; vertical-align: middle' }`. Render options supply dynamic `contentText: inlineText` and `margin: hasAvatar ? '0' : '0 0 0 3em'`.
   - **Single `hoverMessage` Attachment Rule**: `hoverMessage` is attached strictly to `textDecorationType`. It MUST NOT be attached to `avatarDecorationType`. In Monaco, when multiple decoration types on the same line range specify `hoverMessage`, VS Code stacks all hover cards together, causing a duplicated/double hover popup.
 - **Avatar Vertical Alignment (CSS Injection via `textDecoration`)**:
   - In VS Code's Extension Host, decoration options sent across RPC are strictly whitelisted by `fmt.from(e)` (`margin`, `width`, `height`, etc.), **dropping properties like `verticalAlign`**.
@@ -184,20 +185,25 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
 
 ### 4.2 Git CLI & Blame Execution Rules
 
-- **Blame Command**: Use `git blame -L <line>,<line> --porcelain -- <filePath>`.
-  - Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
+- **Hybrid Blame Execution & Caching Strategy**:
+  - **Clean saved documents ($\le 2500$ lines)**: `GitService` executes whole-file blame `git blame --porcelain -- <filePath>` once per document version and populates all lines into memory. Subsequent cursor moves to any line in that file resolve in **0ms (instant memory lookup)** with **zero spawned subprocesses**.
+  - **Dirty documents or large files ($> 2500$ lines)**: Uses targeted single-line blame `git blame -L <line>,<line> --porcelain -- <filePath>`. Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
+- **In-Flight Subprocess Cancellation (`AbortSignal`)**: Always pass an `AbortSignal` to `execGit`. When the user rapidly moves cursor or navigates lines, any pending `git blame` command for a previous line is immediately terminated with `proc.kill("SIGTERM")` to prevent queuing obsolete background processes.
+- **Zero-Debounce on Cache Hit**: In `GlanceController.onSelectionChange`, if the target line is already in `blameCache` (`gitService.hasCachedBlame`), render the inline decoration immediately on the current event turn, bypassing the 100ms debounce timer for a snappy, instantaneous experience.
 - **Interactive Hanging Prevention**: Always execute git subprocesses with `GIT_TERMINAL_PROMPT: "0"` in the process environment to prevent background git commands from hanging indefinitely on credential or passphrase prompts.
 - **Unsaved / Dirty Document Handling**: When the document is dirty (`document.isDirty`), pass document contents through stdin using `--contents -`.
 - **Accurate Uncommitted Timestamps via `fs.stat.mtime`**: Git's internal C implementation of `git blame` assigns `time(NULL)` (`Date.now()`) to all uncommitted lines. To prevent uncommitted lines from perpetually displaying `"just now"` across editor re-blames, `GitService` reads `(await fs.promises.stat(filePath)).mtime` when `isUncommitted && !isDirty`. When the document is dirty in memory, it reflects the active typing session, and once saved, preserves the actual disk file modification timestamp (e.g. `3 hours ago`, `yesterday`).
 - **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`uncommitted changes`) displays in real time without waiting for cursor line jumps.
-- **In-Memory Caching & Remote URL Resolution**:
-  - Cache blame results keyed by `${filePath}:${documentVersion}:${line}`.
+- **In-Memory Caching, Invalidation & Cleanup**:
+  - Cache blame results keyed by `${filePath}:${documentVersion}:${line}` with a 5,000-entry LRU limit.
   - Invalidate file cache on document save (`onDidSaveTextDocument`) or document modification.
-  - Await `getRemoteCommitUrl` and `getCurrentUserEmail` resolution concurrently via `Promise.all` so `remoteCommitUrl` and `isCurrentUser` are immediately available on initial hover render and avatar lookups.
+  - Evict file cache on document close (`onDidCloseTextDocument`) to prevent memory leaks during long coding sessions.
+  - Directory repository root caching: `repoRootCache` caches resolved repository roots per directory to prevent repeated `git rev-parse --show-toplevel` calls while guaranteeing 100% submodule and worktree safety.
+  - Await `getRemoteBaseUrl` and `getCurrentUserEmail` resolution concurrently via `Promise.all` so `remoteCommitUrl` and `isCurrentUser` are immediately available on initial hover render and avatar lookups.
   - Cache repository-level Git current user email (`user.email`) in `currentUserEmailCache` to avoid spawning redundant git subprocesses on every line blame.
-- **Debouncing**: Cursor line changes and active-line document changes must be debounced (default `100ms`) to avoid spawning redundant git processes when navigating or typing rapidly.
+- **Debouncing**: Cursor line changes without a cache hit and active-line document changes must be debounced (default `100ms`) to avoid spawning redundant git processes when navigating or typing rapidly.
 - **Race Condition & Boundary Prevention**:
-  - After awaiting an async git operation, always verify that `vscode.window.activeTextEditor === editor` and `editor.selection.active.line === line` before setting decorations.
+  - After awaiting an async git operation, always verify that `!signal.aborted`, `vscode.window.activeTextEditor === editor`, and `editor.selection.active.line === line` before setting decorations.
   - Always guard against out-of-bounds line numbers (`blame.line < 0 || blame.line >= editor.document.lineCount`) before accessing `editor.document.lineAt`.
 - **Token Replacement Safety**: Use single-pass regular expression token replacements to prevent recursive or cascading substitutions if commit messages or author names contain format token strings (e.g. `${author}`, `${hash}`).
 
