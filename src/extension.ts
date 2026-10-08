@@ -51,6 +51,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.window.onDidChangeWindowState((e) => {
+      if (e.focused && vscode.window.activeTextEditor) {
+        controller?.updateBlame(vscode.window.activeTextEditor, true);
+      }
+    }),
+
     {
       dispose: () => {
         controller?.dispose();
@@ -60,6 +66,45 @@ export function activate(context: vscode.ExtensionContext) {
       },
     },
   );
+
+  // Hook into VS Code built-in Git extension if present to detect external commits
+  try {
+    const gitExtension = vscode.extensions.getExtension("vscode.git");
+    if (gitExtension) {
+      const activateGit = async () => {
+        try {
+          const gitApi = gitExtension.exports?.getAPI?.(2);
+          if (gitApi) {
+            gitApi.repositories?.forEach((repo: any) => {
+              repo.state?.onDidChange?.(() => {
+                gitService?.clearCache();
+                if (vscode.window.activeTextEditor) {
+                  controller?.updateBlame(vscode.window.activeTextEditor, true);
+                }
+              });
+            });
+            gitApi.onDidOpenRepository?.((repo: any) => {
+              repo.state?.onDidChange?.(() => {
+                gitService?.clearCache();
+                if (vscode.window.activeTextEditor) {
+                  controller?.updateBlame(vscode.window.activeTextEditor, true);
+                }
+              });
+            });
+          }
+        } catch {
+          // Ignore if git extension API is unavailable
+        }
+      };
+      if (gitExtension.isActive) {
+        activateGit();
+      } else {
+        gitExtension.activate().then(activateGit, () => {});
+      }
+    }
+  } catch {
+    // Ignore error hook
+  }
 
   // Run immediately on active editor if any
   if (vscode.window.activeTextEditor) {

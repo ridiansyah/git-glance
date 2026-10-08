@@ -280,24 +280,29 @@ export class AvatarService {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 2500);
 
-          const response = await fetch(url, {
-            signal: controller.signal,
-            redirect: "follow",
-          });
-          clearTimeout(timeout);
+          try {
+            const response = await fetch(url, {
+              signal: controller.signal,
+              redirect: "follow",
+            });
 
-          if (response.ok) {
-            const contentType =
-              response.headers.get("content-type") || "image/png";
-            if (contentType.startsWith("image/")) {
-              const arrayBuffer = await response.arrayBuffer();
-              const base64Data = Buffer.from(arrayBuffer).toString("base64");
-              const wrappedSvg = this.wrapImageInSvg(base64Data, contentType);
-              fs.writeFileSync(targetSvgPath, wrappedSvg, "utf8");
-              this.memoryCache.set(key, targetSvgPath);
-              this.notifyAvatarReady(key, targetSvgPath);
-              return;
+            if (response.ok) {
+              const contentType =
+                response.headers.get("content-type") || "image/png";
+              if (contentType.startsWith("image/")) {
+                const arrayBuffer = await response.arrayBuffer();
+                const base64Data = Buffer.from(arrayBuffer).toString("base64");
+                const wrappedSvg = this.wrapImageInSvg(base64Data, contentType);
+                fs.writeFileSync(targetSvgPath, wrappedSvg, "utf8");
+                this.memoryCache.set(key, targetSvgPath);
+                this.notifyAvatarReady(key, targetSvgPath);
+                return;
+              }
             }
+          } catch {
+            // Continue to next candidate URL
+          } finally {
+            clearTimeout(timeout);
           }
         } catch {
           // Continue to next candidate URL

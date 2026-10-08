@@ -7,20 +7,40 @@ export class GitService {
   private repoRootCache = new Map<string, string | null>();
   private remoteUrlCache = new Map<string, string | null>();
   private blameCache = new Map<string, BlameInfo>();
+  private blameCacheByFile = new Map<string, Set<string>>();
   private currentUserEmailCache = new Map<string, string | null>();
+  private pendingFullBlame = new Map<string, Promise<Map<number, BlameInfo> | null>>();
+  private failedBlame = new Set<string>();
 
   /**
    * Clears the blame cache (e.g. on file save, document change, or file close).
    */
   public clearCache(filePath?: string) {
     if (filePath) {
-      for (const key of this.blameCache.keys()) {
-        if (key.startsWith(filePath)) {
+      const keys = this.blameCacheByFile.get(filePath);
+      if (keys) {
+        for (const key of keys) {
           this.blameCache.delete(key);
+          this.cacheKeyToFile.delete(key);
+        }
+        this.blameCacheByFile.delete(filePath);
+      }
+      for (const key of this.failedBlame) {
+        if (key.startsWith(filePath)) {
+          this.failedBlame.delete(key);
+        }
+      }
+      for (const key of this.pendingFullBlame.keys()) {
+        if (key.startsWith(filePath)) {
+          this.pendingFullBlame.delete(key);
         }
       }
     } else {
       this.blameCache.clear();
+      this.blameCacheByFile.clear();
+      this.cacheKeyToFile.clear();
+      this.failedBlame.clear();
+      this.pendingFullBlame.clear();
       this.currentUserEmailCache.clear();
     }
   }
@@ -30,6 +50,10 @@ export class GitService {
    */
   public dispose() {
     this.blameCache.clear();
+    this.blameCacheByFile.clear();
+    this.cacheKeyToFile.clear();
+    this.failedBlame.clear();
+    this.pendingFullBlame.clear();
     this.repoRootCache.clear();
     this.remoteUrlCache.clear();
     this.currentUserEmailCache.clear();
@@ -44,7 +68,13 @@ export class GitService {
     line: number,
   ): boolean {
     const cacheKey = `${filePath}:${documentVersion}:${line}`;
-    return this.blameCache.has(cacheKey);
+    const cached = this.blameCache.get(cacheKey);
+    if (cached !== undefined) {
+      this.blameCache.delete(cacheKey);
+      this.blameCache.set(cacheKey, cached);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -112,7 +142,10 @@ export class GitService {
       clean = clean.slice(0, -4);
     }
 
-    if (clean.startsWith("git@")) {
+    // Handle ssh://[user@]host[:port]/path
+    if (clean.startsWith("ssh://")) {
+      clean = clean.replace(/^ssh:\/\/(?:[^@]+@)?/, "https://").replace(/:\d+\//, "/");
+    } else if (clean.startsWith("git@")) {
       const match = clean.match(/^git@([^:]+):(.+)$/);
       if (match) {
         const [, host, repoPath] = match;
@@ -124,14 +157,27 @@ export class GitService {
       return null;
     }
 
-    if (clean.includes("gitlab.com")) {
-      return `${clean}/-/commit/${sha}`;
+    try {
+      const parsed = new URL(clean);
+      // Strip any sensitive credentials (token/username:password) to prevent leakage
+      parsed.username = "";
+      parsed.password = "";
+
+      const hostname = parsed.hostname.toLowerCase();
+      // Ensure pathname has no trailing slash
+      const cleanUrl = parsed.toString().replace(/\/$/, "");
+
+      if (hostname.includes("gitlab")) {
+        return `${cleanUrl}/-/commit/${sha}`;
+      }
+      if (hostname.includes("bitbucket.org")) {
+        return `${cleanUrl}/commits/${sha}`;
+      }
+      // GitHub and others
+      return `${cleanUrl}/commit/${sha}`;
+    } catch {
+      return null;
     }
-    if (clean.includes("bitbucket.org")) {
-      return `${clean}/commits/${sha}`;
-    }
-    // GitHub and others
-    return `${clean}/commit/${sha}`;
   }
 
   /**
@@ -147,11 +193,19 @@ export class GitService {
     signal?: AbortSignal,
   ): Promise<BlameInfo | null> {
     const cacheKey = `${filePath}:${documentVersion}:${line}`;
-    if (this.blameCache.has(cacheKey)) {
-      return this.blameCache.get(cacheKey)!;
+    const cached = this.blameCache.get(cacheKey);
+    if (cached !== undefined) {
+      this.blameCache.delete(cacheKey);
+      this.blameCache.set(cacheKey, cached);
+      return cached;
     }
 
     if (signal?.aborted) {
+      return null;
+    }
+
+    const fileVersionKey = `${filePath}:${documentVersion}`;
+    if (this.failedBlame.has(fileVersionKey)) {
       return null;
     }
 
@@ -174,51 +228,65 @@ export class GitService {
       }
 
       if (shouldBlameFullFile) {
-        const output = await this.execGit(
-          ["blame", "--porcelain", "--", filePath],
-          repoRoot,
-          undefined,
-          signal,
-        );
+        let fullBlamePromise = this.pendingFullBlame.get(fileVersionKey);
+        if (!fullBlamePromise) {
+          fullBlamePromise = (async () => {
+            try {
+              const output = await this.execGit(
+                ["blame", "--porcelain", "--", filePath],
+                repoRoot,
+                undefined,
+              );
+              const map = this.parsePorcelain(output, repoRoot);
+              let fileMtime: Date | undefined;
 
-        if (signal?.aborted) {
-          return null;
+              for (const blame of map.values()) {
+                if (blame.isUncommitted && !isDirty) {
+                  if (!fileMtime) {
+                    try {
+                      const stat = await fs.promises.stat(filePath);
+                      fileMtime = stat.mtime;
+                    } catch {
+                      // Keep default timestamp
+                    }
+                  }
+                  if (fileMtime) {
+                    blame.authorDate = fileMtime;
+                    blame.committerDate = fileMtime;
+                  }
+                }
+
+                blame.isCurrentUser =
+                  blame.isUncommitted ||
+                  this.isCurrentUser(blame.authorEmail, currentUserEmail);
+
+                if (rawRemote && !blame.isUncommitted) {
+                  const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
+                  if (remoteUrl) {
+                    blame.remoteCommitUrl = remoteUrl;
+                  }
+                }
+
+                this.setBlameCache(
+                  filePath,
+                  `${filePath}:${documentVersion}:${blame.line}`,
+                  blame,
+                );
+              }
+              return map;
+            } catch {
+              this.failedBlame.add(fileVersionKey);
+              return null;
+            } finally {
+              this.pendingFullBlame.delete(fileVersionKey);
+            }
+          })();
+          this.pendingFullBlame.set(fileVersionKey, fullBlamePromise);
         }
 
-        const map = this.parsePorcelain(output, repoRoot);
-        let fileMtime: Date | undefined;
-
-        for (const blame of map.values()) {
-          if (blame.isUncommitted && !isDirty) {
-            if (!fileMtime) {
-              try {
-                const stat = await fs.promises.stat(filePath);
-                fileMtime = stat.mtime;
-              } catch {
-                // Keep default timestamp
-              }
-            }
-            if (fileMtime) {
-              blame.authorDate = fileMtime;
-              blame.committerDate = fileMtime;
-            }
-          }
-
-          blame.isCurrentUser =
-            blame.isUncommitted ||
-            this.isCurrentUser(blame.authorEmail, currentUserEmail);
-
-          if (rawRemote && !blame.isUncommitted) {
-            const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
-            if (remoteUrl) {
-              blame.remoteCommitUrl = remoteUrl;
-            }
-          }
-
-          this.setBlameCache(
-            `${filePath}:${documentVersion}:${blame.line}`,
-            blame,
-          );
+        const map = await fullBlamePromise;
+        if (signal?.aborted || !map) {
+          return null;
         }
 
         return map.get(line) ?? null;
@@ -268,27 +336,53 @@ export class GitService {
             }
           }
 
-          this.setBlameCache(cacheKey, blame);
+          this.setBlameCache(filePath, cacheKey, blame);
         }
 
         return blame ?? null;
       }
     } catch {
+      if (!signal?.aborted) {
+        this.failedBlame.add(fileVersionKey);
+      }
       return null;
     }
   }
 
+  private cacheKeyToFile = new Map<string, string>();
+
   /**
    * Sets blame into memory cache with LRU eviction guard.
    */
-  private setBlameCache(key: string, blame: BlameInfo) {
+  private setBlameCache(filePath: string, key: string, blame: BlameInfo) {
     if (this.blameCache.size >= 5000) {
       const oldestKey = this.blameCache.keys().next().value;
       if (oldestKey) {
         this.blameCache.delete(oldestKey);
+        // Clean up secondary index for evicted entry reliably across all OS platforms
+        const oldFile = this.cacheKeyToFile.get(oldestKey);
+        if (oldFile) {
+          this.cacheKeyToFile.delete(oldestKey);
+          const fileKeys = this.blameCacheByFile.get(oldFile);
+          if (fileKeys) {
+            fileKeys.delete(oldestKey);
+            if (fileKeys.size === 0) {
+              this.blameCacheByFile.delete(oldFile);
+            }
+          }
+        }
       }
     }
     this.blameCache.set(key, blame);
+    this.cacheKeyToFile.set(key, filePath);
+
+    // Maintain secondary file index
+    let fileKeys = this.blameCacheByFile.get(filePath);
+    if (!fileKeys) {
+      fileKeys = new Set();
+      this.blameCacheByFile.set(filePath, fileKeys);
+    }
+    fileKeys.add(key);
   }
 
   /**
@@ -370,6 +464,34 @@ export class GitService {
   }
 
   /**
+   * Fetches full commit metadata (author, email, date, subject, full message) for a specific commit SHA.
+   */
+  public async getCommitMetadata(
+    repoRoot: string,
+    sha: string,
+  ): Promise<{ author: string; authorEmail: string; authorDate: Date; summary: string; fullMessage: string } | null> {
+    try {
+      const output = await this.execGit(
+        ["show", "-s", "--format=%an%x00%ae%x00%at%x00%s%x00%B", sha],
+        repoRoot,
+      );
+      const parts = output.split("\0");
+      if (parts.length >= 5) {
+        return {
+          author: parts[0],
+          authorEmail: parts[1],
+          authorDate: new Date(parseInt(parts[2], 10) * 1000),
+          summary: parts[3],
+          fullMessage: parts.slice(4).join("").trim(),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Parses `git blame --porcelain` stream output for single or multiple lines.
    */
   public parsePorcelain(
@@ -406,7 +528,7 @@ export class GitService {
       }
 
       const parts = line.split(" ");
-      if (parts.length >= 3 && parts[0].length === 40) {
+      if (parts.length >= 3 && (parts[0].length === 40 || parts[0].length === 64)) {
         const sha = parts[0];
         const finalLine = parseInt(parts[2], 10) - 1; // 0-based
         i++;
@@ -484,8 +606,7 @@ export class GitService {
           summary: meta.summary,
           line: finalLine,
           isUncommitted: meta.isUncommitted,
-          isCurrentUser:
-            meta.isUncommitted || meta.author.toLowerCase() === "you",
+          isCurrentUser: meta.isUncommitted,
           repoRoot,
         });
       } else {
@@ -557,11 +678,11 @@ export class GitService {
         signal.addEventListener("abort", onAbort, { once: true });
       }
 
-      let stdout = "";
+      const stdoutChunks: Buffer[] = [];
       let stderr = "";
 
-      proc.stdout.on("data", (chunk) => {
-        stdout += chunk;
+      proc.stdout.on("data", (chunk: Buffer) => {
+        stdoutChunks.push(chunk);
       });
 
       proc.stderr.on("data", (chunk) => {
@@ -581,7 +702,7 @@ export class GitService {
           isSettled = true;
           cleanup();
           if (code === 0) {
-            resolve(stdout);
+            resolve(Buffer.concat(stdoutChunks).toString("utf8"));
           } else {
             reject(new Error(`Git exited with code ${code}: ${stderr}`));
           }

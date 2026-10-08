@@ -195,13 +195,18 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
 - **Accurate Uncommitted Timestamps via `fs.stat.mtime`**: Git's internal C implementation of `git blame` assigns `time(NULL)` (`Date.now()`) to all uncommitted lines. To prevent uncommitted lines from perpetually displaying `"just now"` across editor re-blames, `GitService` reads `(await fs.promises.stat(filePath)).mtime` when `isUncommitted && !isDirty`. When the document is dirty in memory, it reflects the active typing session, and once saved, preserves the actual disk file modification timestamp (e.g. `3 hours ago`, `yesterday`).
 - **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`uncommitted changes`) displays in real time without waiting for cursor line jumps.
 - **In-Memory Caching, Invalidation & Cleanup**:
-  - Cache blame results keyed by `${filePath}:${documentVersion}:${line}` with a 5,000-entry LRU limit.
-  - Invalidate file cache on document save (`onDidSaveTextDocument`) or document modification.
+  - Cache blame results keyed by `${filePath}:${documentVersion}:${line}` with a 5,000-entry true LRU limit (re-inserted on cache hits to guarantee actual least-recently-used eviction order).
+  - Dual-index architecture: `blameCacheByFile` (`Map<string, Set<string>>`) and `cacheKeyToFile` (`Map<string, string>`) enable $O(1)$ file-scoped cache eviction on document edits, saves, and closes across all OS platforms (including Windows paths).
+  - In-flight promise deduplication: `pendingFullBlame` (`Map<string, Promise<Map<number, BlameInfo> | null>>`) de-duplicates concurrent full-file blame runs for the same file version without being aborted by rapid cursor navigation.
+  - Negative caching: `failedBlame` (`Set<string>`) caches un-blameable / untracked / ignored files per version to prevent spawning git subprocesses on every cursor move.
+  - Invalidate file cache on document save (`onDidSaveTextDocument`), active document modification (`onDidChangeTextDocument`), or repository-level Git state changes (`vscode.git` API).
   - Evict file cache on document close (`onDidCloseTextDocument`) to prevent memory leaks during long coding sessions.
   - Directory repository root caching: `repoRootCache` caches resolved repository roots per directory to prevent repeated `git rev-parse --show-toplevel` calls while guaranteeing 100% submodule and worktree safety.
   - Await `getRemoteBaseUrl` and `getCurrentUserEmail` resolution concurrently via `Promise.all` so `remoteCommitUrl` and `isCurrentUser` are immediately available on initial hover render and avatar lookups.
   - Cache repository-level Git current user email (`user.email`) in `currentUserEmailCache` to avoid spawning redundant git subprocesses on every line blame.
-- **Debouncing**: Cursor line changes without a cache hit and active-line document changes must be debounced (default `100ms`) to avoid spawning redundant git processes when navigating or typing rapidly.
+- **Debouncing & Battery Preservation**:
+  - Cursor line changes without a cache hit use default `100ms` debounce (`gitGlance.delay`).
+  - Active-line document edits use extended debounce ($\ge 300\text{ms}$) and immediately cancel in-flight git processes to avoid battery-draining subprocess churn during rapid typing.
 - **Race Condition & Boundary Prevention**:
   - After awaiting an async git operation, always verify that `!signal.aborted`, `vscode.window.activeTextEditor === editor`, and `editor.selection.active.line === line` before setting decorations.
   - Always guard against out-of-bounds line numbers (`blame.line < 0 || blame.line >= editor.document.lineCount`) before accessing `editor.document.lineAt`.

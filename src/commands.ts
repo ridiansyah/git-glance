@@ -72,35 +72,67 @@ export function registerCommands(
           sha = blame.sha;
         }
 
-        if (!sha || !blame) {
+        if (!sha) {
           vscode.window.showInformationMessage(
-            "Git Glance: No commit information for current line.",
+            "Git Glance: No commit information available.",
           );
           return;
         }
 
-        if (blame.isUncommitted) {
+        if (blame && blame.isUncommitted && sha === blame.sha) {
           vscode.window.showInformationMessage(
             "✨ This line contains uncommitted changes.",
           );
           return;
         }
 
-        const repoRoot = blame.repoRoot;
-        let details = blame.summary;
+        const editor = vscode.window.activeTextEditor;
+        const filePath = editor?.document.uri.fsPath;
+        const repoRoot =
+          blame?.repoRoot ?? (filePath ? await gitService.getRepoRoot(filePath) : null);
 
-        if (repoRoot) {
+        if (!repoRoot) {
+          vscode.window.showWarningMessage("Git Glance: Not in a git repository.");
+          return;
+        }
+
+        let authorName = blame?.author ?? "Unknown";
+        let authorEmail = blame?.authorEmail ?? "";
+        let authorDate = blame?.authorDate ?? new Date();
+        let summary = blame?.summary ?? "";
+        let details = summary;
+        let isCurrentUser = blame?.isCurrentUser ?? false;
+        let shortSha = sha.substring(0, 7);
+        let remoteCommitUrl = blame?.remoteCommitUrl;
+
+        // If sha was explicitly provided from hover link and differs from active cursor line blame
+        if (!blame || blame.sha !== sha) {
+          const meta = await gitService.getCommitMetadata(repoRoot, sha);
+          if (meta) {
+            authorName = meta.author;
+            authorEmail = meta.authorEmail;
+            authorDate = meta.authorDate;
+            summary = meta.summary;
+            details = meta.fullMessage;
+            const currentUserEmail = await gitService.getCurrentUserEmail(repoRoot);
+            isCurrentUser = gitService.isCurrentUser(authorEmail, currentUserEmail);
+          }
+          remoteCommitUrl = (await gitService.getRemoteCommitUrl(repoRoot, sha)) ?? undefined;
+        } else {
           const fullMessage = await gitService.getCommitDetails(repoRoot, sha);
           if (fullMessage) {
             details = fullMessage;
           }
         }
 
+        const hasExtendedBody = details && details.trim() !== summary.trim();
+        const authorLine = `Author: ${isCurrentUser && authorName.toLowerCase() !== "you" ? `You (${authorName})` : authorName} • ${authorDate.toLocaleString()}`;
+
         const items: vscode.QuickPickItem[] = [
           {
-            label: `$(git-commit) Commit: ${blame.shortSha}`,
-            description: blame.summary,
-            detail: `Author: ${blame.isCurrentUser && blame.author.toLowerCase() !== "you" ? `You (${blame.author})` : blame.author} • ${blame.authorDate.toLocaleString()}`,
+            label: `$(git-commit) Commit: ${shortSha}`,
+            description: summary,
+            detail: hasExtendedBody ? `${authorLine}\n\n${details}` : authorLine,
           },
           {
             label: "$(clippy) Copy Commit Hash",
@@ -108,19 +140,20 @@ export function registerCommands(
           },
           {
             label: "$(copy) Copy Commit Message",
-            description: blame.summary,
+            description: summary,
+            detail: hasExtendedBody ? details : undefined,
           },
         ];
 
-        if (blame.remoteCommitUrl) {
+        if (remoteCommitUrl) {
           items.push({
             label: "$(globe) Open on Web",
-            description: blame.remoteCommitUrl,
+            description: remoteCommitUrl,
           });
         }
 
         const selected = await vscode.window.showQuickPick(items, {
-          placeHolder: `Commit ${blame.shortSha}: ${blame.summary}`,
+          placeHolder: `Commit ${shortSha}: ${summary}`,
         });
 
         if (!selected) {
@@ -137,9 +170,9 @@ export function registerCommands(
           vscode.window.showInformationMessage("📋 Copied commit message.");
         } else if (
           selected.label.includes("Open on Web") &&
-          blame.remoteCommitUrl
+          remoteCommitUrl
         ) {
-          vscode.env.openExternal(vscode.Uri.parse(blame.remoteCommitUrl));
+          vscode.env.openExternal(vscode.Uri.parse(remoteCommitUrl));
         }
       },
     ),

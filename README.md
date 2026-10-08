@@ -47,13 +47,14 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 - **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~25 KB file with zero runtime dependencies.
 - **⚡ Instant 0ms Lookups & Zero-Debounce**: Clean saved files are blamed once and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
 - **🛡️ Process Cancellation & Zero DOM Churn**: Automatically aborts obsolete in-flight Git processes on fast cursor navigation and reuses persistent decoration types to eliminate Monaco stylesheet churn.
+- **🔋 Battery-Friendly Typing**: While you type on the active line, re-blame waits for a longer pause (≥ 300 ms) and cancels stale Git processes, so subprocesses don't pile up.
 - **👀 Subdued Inline Annotation**: Appears gracefully at the end of the active cursor line with subtle, theme-adaptive coloring.
 - **✨ Uncommitted Line Detection**: Detects uncommitted and newly added lines seamlessly (`You, 3 hours ago: Uncommitted changes`).
 - **💬 Rich Interactive Hover Card**: Hovering over the annotation displays an elegant card with:
   - Author name, email, and exact commit timestamp.
   - Short commit SHA.
   - Formatted commit subject and multi-line body.
-  - Quick action buttons: **Copy Hash**, **View Details**, and **Open on Web** (GitHub / GitLab / Bitbucket).
+  - Quick action buttons: **Copy Hash**, **View Details**, and **Open on Web** (GitHub / GitLab incl. self-hosted / Bitbucket).
 - **🎨 Theme-Adaptive**: Automatically blends with your favorite VS Code light and dark color themes.
 - **🛠️ Fully Configurable**: Personalize prefix emojis, text templates, date formats, and debounce speed.
 

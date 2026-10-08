@@ -2,7 +2,7 @@
   "name": "git-glance",
   "displayName": "Git Glance",
   "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "publisher": "ridiansyah",
   "author": {
     "name": "Wahyu Ridiansyah",
@@ -20,8 +20,8 @@
   },
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": true,
-      "description": "Git Glance only reads local git information."
+      "supported": false,
+      "description": "Git Glance executes local git commands which are disabled in Restricted Mode for security."
     },
     "virtualWorkspaces": {
       "supported": false,
@@ -93,13 +93,16 @@
           "command": "gitGlance.toggleAvatar"
         },
         {
-          "command": "gitGlance.copyHash"
+          "command": "gitGlance.copyHash",
+          "when": "editorTextFocus && resourceScheme == file"
         },
         {
-          "command": "gitGlance.showCommitDetails"
+          "command": "gitGlance.showCommitDetails",
+          "when": "editorTextFocus && resourceScheme == file"
         },
         {
-          "command": "gitGlance.openOnRemote"
+          "command": "gitGlance.openOnRemote",
+          "when": "editorTextFocus && resourceScheme == file"
         }
       ]
     },

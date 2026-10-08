@@ -37,6 +37,10 @@ test("Date utilities - formatRelativeTime", () => {
   const t2mo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
   assert.strictEqual(formatRelativeTime(t2mo, now), "2 months ago");
 
+  // 360 days ago (close to 1 year, must not be "0 years ago")
+  const t360d = new Date(now.getTime() - 360 * 24 * 60 * 60 * 1000);
+  assert.strictEqual(formatRelativeTime(t360d, now), "1 year ago");
+
   // 2 years ago
   const t2y = new Date(now.getTime() - 730 * 24 * 60 * 60 * 1000);
   assert.strictEqual(formatRelativeTime(t2y, now), "2 years ago");
@@ -138,6 +142,36 @@ test("GitService - formatCommitWebUrl", () => {
     "abc1234",
   );
   assert.strictEqual(bb, "https://bitbucket.org/org/repo/commits/abc1234");
+
+  // Credential stripping (token security)
+  const credentialUrl = gitService.formatCommitWebUrl(
+    "https://oauth2:ghp_SECRET_TOKEN_12345@github.com/myorg/myrepo.git",
+    "abc1234",
+  );
+  assert.strictEqual(
+    credentialUrl,
+    "https://github.com/myorg/myrepo/commit/abc1234",
+  );
+
+  // False-positive GitLab URL on GitHub (github.com repo named gitlab-tools)
+  const ghGitLabTools = gitService.formatCommitWebUrl(
+    "https://github.com/acme/gitlab-tools.git",
+    "abc1234",
+  );
+  assert.strictEqual(
+    ghGitLabTools,
+    "https://github.com/acme/gitlab-tools/commit/abc1234",
+  );
+
+  // ssh:// format with port
+  const sshWithPort = gitService.formatCommitWebUrl(
+    "ssh://git@gitlab.company.com:2222/group/project.git",
+    "abc1234",
+  );
+  assert.strictEqual(
+    sshWithPort,
+    "https://gitlab.company.com/group/project/-/commit/abc1234",
+  );
 });
 
 test("FormatPresets - default and presets", () => {
@@ -450,10 +484,36 @@ filename test.ts
   assert.strictEqual(l2.summary, "Uncommitted changes");
 });
 
-test("GitService - hasCachedBlame and clearCache", () => {
+test("GitService - hasCachedBlame and clearCache with Windows path", () => {
   const gitService = new GitService();
+  const windowsPath = "C:\\Users\\User\\Project\\src\\index.ts";
   assert.strictEqual(
-    gitService.hasCachedBlame("/mock/file.ts", 1, 10),
+    gitService.hasCachedBlame(windowsPath, 1, 10),
     false,
   );
+  gitService.clearCache(windowsPath);
+});
+
+test("GitService - parsePorcelain with SHA-256 (64 hex characters)", () => {
+  const gitService = new GitService();
+  const sha256Output = `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 1 1 1
+author Satoshi Nakamoto
+author-mail <satoshi@bitcoin.org>
+author-time 1231006505
+author-tz +0000
+committer Satoshi Nakamoto
+committer-mail <satoshi@bitcoin.org>
+committer-time 1231006505
+committer-tz +0000
+summary The Times 03/Jan/2009 Chancellor on brink of second bailout for banks
+filename genesis.txt
+\tThe Times 03/Jan/2009 Chancellor on brink of second bailout for banks`;
+
+  const result = gitService.parsePorcelain(sha256Output, "/repo");
+  assert.strictEqual(result.size, 1);
+  const blame0 = result.get(0);
+  assert.ok(blame0);
+  assert.strictEqual(blame0.sha, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  assert.strictEqual(blame0.shortSha, "e3b0c44");
+  assert.strictEqual(blame0.author, "Satoshi Nakamoto");
 });

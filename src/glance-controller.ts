@@ -50,10 +50,18 @@ export class GlanceController {
     this.updateBlame(vscode.window.activeTextEditor, true);
   }
 
-  public toggle() {
+  public async toggle() {
     const wsConfig = vscode.workspace.getConfiguration("gitGlance");
+    const inspected = wsConfig.inspect<boolean>("enabled");
+    const target =
+      inspected?.workspaceFolderValue !== undefined
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : inspected?.workspaceValue !== undefined
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+
     const newEnabled = !this.config.enabled;
-    wsConfig.update("enabled", newEnabled, vscode.ConfigurationTarget.Global);
+    await wsConfig.update("enabled", newEnabled, target);
     this.config.enabled = newEnabled;
 
     if (!newEnabled) {
@@ -67,14 +75,18 @@ export class GlanceController {
     }
   }
 
-  public toggleAvatar() {
+  public async toggleAvatar() {
     const wsConfig = vscode.workspace.getConfiguration("gitGlance");
+    const inspected = wsConfig.inspect<boolean>("showAvatar");
+    const target =
+      inspected?.workspaceFolderValue !== undefined
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : inspected?.workspaceValue !== undefined
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+
     const newShowAvatar = !this.config.showAvatar;
-    wsConfig.update(
-      "showAvatar",
-      newShowAvatar,
-      vscode.ConfigurationTarget.Global,
-    );
+    await wsConfig.update("showAvatar", newShowAvatar, target);
     this.config.showAvatar = newShowAvatar;
 
     vscode.window.showInformationMessage(
@@ -171,13 +183,20 @@ export class GlanceController {
 
     if (affectsActiveLine) {
       this.currentBlame = null;
+      this.gitService.clearCache(event.document.fileName);
+
+      if (this.activeAbortController) {
+        this.activeAbortController.abort();
+        this.activeAbortController = undefined;
+      }
+
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
         this.debounceTimer = undefined;
       }
       this.debounceTimer = setTimeout(() => {
         this.updateBlame(editor, true);
-      }, this.config.delay);
+      }, Math.max(this.config.delay, 300));
     }
   }
 
@@ -185,7 +204,7 @@ export class GlanceController {
     editor: vscode.TextEditor | undefined,
     force: boolean = false,
   ) {
-    if (!editor || !this.config.enabled) {
+    if (!editor || !this.config.enabled || !vscode.workspace.isTrusted) {
       if (editor) {
         this.decorationManager.clear(editor);
       }
@@ -218,7 +237,7 @@ export class GlanceController {
       document.fileName,
       line,
       document.version,
-      document.getText(),
+      document.isDirty ? document.getText() : undefined,
       document.isDirty,
       document.lineCount,
       abortController.signal,

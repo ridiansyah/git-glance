@@ -151,7 +151,12 @@ export class DecorationManager {
 
     const md = new vscode.MarkdownString(undefined, true);
     md.supportThemeIcons = true;
-    md.isTrusted = true;
+    md.isTrusted = {
+      enabledCommands: [
+        "gitGlance.copyHash",
+        "gitGlance.showCommitDetails",
+      ],
+    };
     md.supportHtml = true;
 
     const timeAgo = formatRelativeTime(blame.authorDate);

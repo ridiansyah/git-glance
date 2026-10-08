@@ -33,14 +33,15 @@ export function formatRelativeTime(date: Date, now: Date = new Date()): string {
   if (diffMonth < 12) {
     return diffMonth === 1 ? "1 month ago" : `${diffMonth} months ago`;
   }
-  return diffYear === 1 ? "1 year ago" : `${diffYear} years ago`;
+  const years = Math.max(1, diffYear);
+  return years === 1 ? "1 year ago" : `${years} years ago`;
 }
 
 /**
  * Formats a Date object into a short clean string (e.g. 'Sep 28, 2026').
  */
 export function formatShortDate(date: Date): string {
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",

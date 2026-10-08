@@ -4,6 +4,39 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-10-08
+
+### Added
+
+- **Self-Hosted GitLab Links**: "Open in Browser" now uses the correct `/-/commit/` path for self-hosted GitLab instances, not just `gitlab.com`.
+- **Full Commit Body in Details**: `Git Glance: Show Commit Details` now shows the full multi-line commit message in the QuickPick, and accurately resolves arbitrary commit SHAs clicked from hover tooltips.
+- **SHA-256 Git Repository Support**: Full compatibility with repositories initialized with `objectFormat=sha256` (64-character commit hashes).
+- **External Git Commit Reactivity**: Detects commits made externally via terminal or Git SCM views through `vscode.git` API and window focus events, clearing caches automatically.
+
+### Changed
+
+- **Battery-Friendly Typing**: Edits on the active line now wait at least 300 ms before re-blaming and cancel any in-flight Git process right away.
+- **Context-Aware Command Palette**: Copy Hash, Show Commit Details, and Open on Remote only appear when a file editor has focus.
+- **Consistent Short Dates**: `${date}` always renders in English (e.g. `Sep 28, 2026`), whatever the system locale.
+- **Scoped Configuration Toggle**: `toggle` and `toggleAvatar` now accurately respect and update workspace-level settings when configured in `.vscode/settings.json`.
+
+### Fixed
+
+- **Memory**: Clean documents no longer copy their full text on every cursor move.
+- **Cross-Platform Cache Indexing**: File-scoped cache eviction now supports Windows drive paths (`C:\...`) seamlessly.
+- **In-Flight Blame Deduplication & Negative Cache**: Prevents duplicate concurrent Git processes for the same file version and stops repeating failed blames on untracked/ignored files.
+- **Sensitive Token Stripping**: Automatically removes embedded credentials and tokens from Git remote URLs before building web commit links.
+- **Workspace Security Hardening**: Properly disables execution in untrusted workspaces / Restricted Mode to prevent unauthorized code execution.
+- **Hover Command Sandboxing**: Restricts `MarkdownString.isTrusted` strictly to Git Glance's internal commands (`copyHash`, `showCommitDetails`).
+- **Date Edge Cases**: Corrected relative time calculation for commits between 360 and 364 days old (preventing "0 years ago").
+- **True LRU Cache**: Cache hits now refresh entry order, so lines you revisit aren't evicted first.
+- **Faster Cache Invalidation**: Clearing a file's cache on save, edit, or close no longer scans the entire cache.
+- **Stale Blame Race**: Typing on the active line cancels pending blame requests, so outdated results can't overwrite fresh ones.
+- **Toggle Reliability**: `toggle` and `toggleAvatar` wait for the setting to be written before updating the view.
+- **Avatar Timer Leak**: Avatar download timeouts are always cleared, even when a request fails.
+
+---
+
 ## [1.1.3] - 2026-10-07
 
 ### Added
