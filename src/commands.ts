@@ -1,6 +1,25 @@
 import * as vscode from "vscode";
 import { GlanceController } from "./glance-controller";
 import { GitService } from "./git";
+import { BlameInfo } from "./types";
+
+interface DetailsItem extends vscode.QuickPickItem {
+  action?: "copyHash" | "copyMessage" | "openWeb";
+}
+
+async function resolveRepoRoot(
+  blame: BlameInfo | null,
+  gitService: GitService,
+): Promise<string | null> {
+  if (blame !== null && blame.repoRoot !== undefined) {
+    return blame.repoRoot;
+  }
+  const editor = vscode.window.activeTextEditor;
+  if (editor === undefined || editor.document.uri.scheme !== "file") {
+    return null;
+  }
+  return gitService.getRepoRoot(editor.document.uri.fsPath);
+}
 
 export function registerCommands(
   context: vscode.ExtensionContext,
@@ -86,69 +105,66 @@ export function registerCommands(
           return;
         }
 
-        const editor = vscode.window.activeTextEditor;
-        const filePath = editor?.document.uri.fsPath;
-        const repoRoot =
-          blame?.repoRoot ?? (filePath ? await gitService.getRepoRoot(filePath) : null);
-
+        const repoRoot = await resolveRepoRoot(blame, gitService);
         if (!repoRoot) {
           vscode.window.showWarningMessage("Git Glance: Not in a git repository.");
           return;
         }
 
-        let authorName = blame?.author ?? "Unknown";
-        let authorEmail = blame?.authorEmail ?? "";
-        let authorDate = blame?.authorDate ?? new Date();
-        let summary = blame?.summary ?? "";
-        let details = summary;
-        let isCurrentUser = blame?.isCurrentUser ?? false;
-        let shortSha = sha.substring(0, 7);
-        let remoteCommitUrl = blame?.remoteCommitUrl;
-
-        // If sha was explicitly provided from hover link and differs from active cursor line blame
-        if (!blame || blame.sha !== sha) {
-          const meta = await gitService.getCommitMetadata(repoRoot, sha);
-          if (meta) {
-            authorName = meta.author;
-            authorEmail = meta.authorEmail;
-            authorDate = meta.authorDate;
-            summary = meta.summary;
-            details = meta.fullMessage;
-            const currentUserEmail = await gitService.getCurrentUserEmail(repoRoot);
-            isCurrentUser = gitService.isCurrentUser(authorEmail, currentUserEmail);
-          }
-          remoteCommitUrl = (await gitService.getRemoteCommitUrl(repoRoot, sha)) ?? undefined;
-        } else {
-          const fullMessage = await gitService.getCommitDetails(repoRoot, sha);
-          if (fullMessage) {
-            details = fullMessage;
-          }
+        const meta = await gitService.getCommitMetadata(repoRoot, sha);
+        if (!meta) {
+          vscode.window.showWarningMessage(
+            `Git Glance: Commit ${sha.substring(0, 7)} not found.`,
+          );
+          return;
         }
 
-        const hasExtendedBody = details && details.trim() !== summary.trim();
-        const authorLine = `Author: ${isCurrentUser && authorName.toLowerCase() !== "you" ? `You (${authorName})` : authorName} • ${authorDate.toLocaleString()}`;
+        const currentUserEmail = await gitService.getCurrentUserEmail(repoRoot);
+        const isCurrentUser = gitService.isCurrentUser(
+          meta.authorEmail,
+          currentUserEmail,
+        );
+        const remoteCommitUrl = await gitService.getRemoteCommitUrl(repoRoot, sha);
+        const shortSha = sha.substring(0, 7);
+        const { summary, fullMessage } = meta;
 
-        const items: vscode.QuickPickItem[] = [
+        const body = fullMessage.slice(summary.length).trim();
+        const authorName =
+          isCurrentUser && meta.author.toLowerCase() !== "you"
+            ? `You (${meta.author})`
+            : meta.author;
+        const authorLine = `Author: ${authorName} • ${meta.authorDate.toLocaleString()}`;
+
+        // QuickPick renders `detail` on one line, so the body is joined with " · ".
+        const bodyOneLine = body
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .join(" · ");
+
+        const items: DetailsItem[] = [
           {
             label: `$(git-commit) Commit: ${shortSha}`,
             description: summary,
-            detail: hasExtendedBody ? `${authorLine}\n\n${details}` : authorLine,
+            detail: bodyOneLine.length > 0 ? `${authorLine} — ${bodyOneLine}` : authorLine,
           },
           {
             label: "$(clippy) Copy Commit Hash",
             description: sha,
+            action: "copyHash",
           },
           {
             label: "$(copy) Copy Commit Message",
             description: summary,
-            detail: hasExtendedBody ? details : undefined,
+            action: "copyMessage",
           },
         ];
 
-        if (remoteCommitUrl) {
+        if (remoteCommitUrl !== null) {
           items.push({
             label: "$(globe) Open on Web",
             description: remoteCommitUrl,
+            action: "openWeb",
           });
         }
 
@@ -160,18 +176,15 @@ export function registerCommands(
           return;
         }
 
-        if (selected.label.includes("Copy Commit Hash")) {
+        if (selected.action === "copyHash") {
           await vscode.env.clipboard.writeText(sha);
           vscode.window.showInformationMessage(
-            `📋 Copied commit hash: ${sha.substring(0, 7)}`,
+            `📋 Copied commit hash: ${shortSha}`,
           );
-        } else if (selected.label.includes("Copy Commit Message")) {
-          await vscode.env.clipboard.writeText(details);
+        } else if (selected.action === "copyMessage") {
+          await vscode.env.clipboard.writeText(fullMessage);
           vscode.window.showInformationMessage("📋 Copied commit message.");
-        } else if (
-          selected.label.includes("Open on Web") &&
-          remoteCommitUrl
-        ) {
+        } else if (selected.action === "openWeb" && remoteCommitUrl !== null) {
           vscode.env.openExternal(vscode.Uri.parse(remoteCommitUrl));
         }
       },
@@ -195,29 +208,27 @@ export function registerCommands(
           sha = blame.sha;
         }
 
-        if (!blame || !sha) {
+        if (!sha) {
           vscode.window.showWarningMessage("Git Glance: No commit found.");
           return;
         }
 
-        if (blame.isUncommitted || sha.replace(/0/g, "").length === 0) {
+        if (sha.replace(/0/g, "").length === 0) {
           vscode.window.showInformationMessage(
             "Git Glance: Line contains uncommitted changes.",
           );
           return;
         }
 
-        if (!blame.repoRoot) {
+        const repoRoot = await resolveRepoRoot(blame, gitService);
+        if (!repoRoot) {
           vscode.window.showWarningMessage(
             "Git Glance: Not in a git repository.",
           );
           return;
         }
 
-        const remoteUrl = await gitService.getRemoteCommitUrl(
-          blame.repoRoot,
-          sha,
-        );
+        const remoteUrl = await gitService.getRemoteCommitUrl(repoRoot, sha);
         if (!remoteUrl) {
           vscode.window.showWarningMessage(
             "Git Glance: Remote repository URL not found or unsupported.",

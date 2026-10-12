@@ -1,8 +1,11 @@
 import test from "node:test";
 import * as assert from "node:assert";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { formatRelativeTime, formatCustomDate } from "../utils/date";
-import { GitService } from "../git";
-import { formatInlineText } from "../utils/format";
+import { GitService, createUncommittedBlame } from "../git";
+import { formatInlineText, escapeMarkdown, truncateText } from "../utils/format";
 import { GitGlanceConfig } from "../types";
 import { AvatarService } from "../utils/avatar";
 
@@ -210,6 +213,10 @@ test("FormatPresets - default and presets", () => {
     hoverDateFormat: "DD/MM/YYYY HH:mm",
     delay: 100,
     showHover: true,
+    avatarSource: "remote",
+    maxMessageLength: 0,
+    remote: "",
+    useIgnoreRevsFile: true,
   };
 
   // 1. Default preset
@@ -516,4 +523,87 @@ filename genesis.txt
   assert.strictEqual(blame0.sha, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   assert.strictEqual(blame0.shortSha, "e3b0c44");
   assert.strictEqual(blame0.author, "Satoshi Nakamoto");
+});
+
+test("escapeMarkdown - neutralizes HTML, autolinks, and entities", () => {
+  const escaped = escapeMarkdown('Fix <img src="https://t.example/p.gif"> & more');
+  assert.strictEqual(/(^|[^\\])</.test(escaped), false, "no unescaped '<'");
+  assert.strictEqual(escaped.includes("\\<img"), true);
+  assert.strictEqual(escaped.includes("\\&"), true);
+  assert.strictEqual(escapeMarkdown("<a@b.c>"), "\\<a@b\\.c\\>");
+});
+
+test("truncateText - code point aware with ellipsis", () => {
+  assert.strictEqual(truncateText("Add JWT middleware", 0), "Add JWT middleware");
+  assert.strictEqual(truncateText("Add JWT middleware", 18), "Add JWT middleware");
+  assert.strictEqual(truncateText("Add JWT middleware", 8), "Add JWT…");
+  assert.strictEqual(truncateText("🚀🚀🚀🚀", 3), "🚀🚀…");
+});
+
+test("formatInlineText - maxMessageLength, unknown preset, synthesized uncommitted line", () => {
+  const config: GitGlanceConfig = {
+    enabled: true,
+    preset: "default",
+    showAvatar: true,
+    avatarSource: "remote",
+    prefix: "",
+    format: "${author}, ${time}: ${message}",
+    uncommittedFormat: "${author}, ${time}: ${message}",
+    dateStyle: "relative",
+    hoverDateFormat: "DD/MM/YYYY HH:mm",
+    delay: 100,
+    showHover: true,
+    maxMessageLength: 12,
+    remote: "",
+    useIgnoreRevsFile: true,
+  };
+
+  const blame = {
+    ...createUncommittedBlame(3, "/repo"),
+    sha: "1234567890abcdef1234567890abcdef12345678",
+    shortSha: "1234567",
+    author: "Jane Doe",
+    authorEmail: "jane@example.com",
+    summary: "Refactor the session store to use Redis",
+    isUncommitted: false,
+    isCurrentUser: false,
+  };
+  assert.strictEqual(
+    formatInlineText(blame, config),
+    "Jane Doe, just now: Refactor th…",
+  );
+
+  const unknownPreset = { ...config, preset: "nope" as GitGlanceConfig["preset"] };
+  assert.strictEqual(
+    formatInlineText(blame, unknownPreset),
+    "Jane Doe, just now: Refactor th…",
+  );
+
+  const typing = createUncommittedBlame(7, "/repo");
+  assert.strictEqual(typing.line, 7);
+  assert.strictEqual(typing.isUncommitted, true);
+  assert.strictEqual(
+    formatInlineText(typing, { ...config, maxMessageLength: 0 }),
+    "You, just now: Uncommitted changes",
+  );
+});
+
+test("AvatarService - initials-only mode never resolves a photo", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "git-glance-avatar-"));
+  try {
+    const avatarService = new AvatarService(dir);
+    const avatarPath = avatarService.getAvatarPath(
+      "Jane Doe",
+      "jane@example.com",
+      false,
+      false,
+      "https://github.com/acme/app/commit/1234567890abcdef1234567890abcdef12345678",
+    );
+    assert.ok(avatarPath);
+    assert.strictEqual(avatarPath.endsWith("_initials_v4.svg"), true);
+    assert.strictEqual(fs.readFileSync(avatarPath, "utf8").includes(">JD<"), true);
+    avatarService.dispose();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

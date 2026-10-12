@@ -1,62 +1,200 @@
 import * as cp from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { BlameInfo } from "./types";
+import { BlameInfo, BlameRequest, GitServiceOptions } from "./types";
+
+const FULL_BLAME_MAX_LINES = 2500;
+const CACHE_LIMIT = 5000;
+const UNCOMMITTED_SHA = "0".repeat(40);
+
+export type GitErrorKind = "aborted" | "timeout" | "exit" | "spawn";
+
+export class GitCommandError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: GitErrorKind,
+    public readonly stderr: string = "",
+  ) {
+    super(message);
+  }
+}
+
+export interface GitServiceTimeouts {
+  fullBlameMs: number;
+  lineBlameMs: number;
+  defaultMs: number;
+}
+
+interface ExecOptions {
+  stdin?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+interface PendingFullBlame {
+  promise: Promise<Map<number, BlameInfo>>;
+  controller: AbortController;
+}
+
+interface BlameContext {
+  filePath: string;
+  repoRoot: string;
+  isDirty: boolean;
+  currentUserEmail: string | null;
+  rawRemote: string | null;
+  ignoreRevsFile: string | null;
+}
+
+/**
+ * Builds the blame shown for a line the user is editing right now, without running git.
+ */
+export function createUncommittedBlame(
+  line: number,
+  repoRoot?: string,
+  date: Date = new Date(),
+): BlameInfo {
+  return {
+    sha: UNCOMMITTED_SHA,
+    shortSha: "0000000",
+    author: "You",
+    authorEmail: "not.committed.yet",
+    authorDate: date,
+    authorTimeZone: "",
+    committer: "You",
+    committerEmail: "not.committed.yet",
+    committerDate: date,
+    summary: "Uncommitted changes",
+    line,
+    isUncommitted: true,
+    isCurrentUser: true,
+    repoRoot,
+  };
+}
+
+function isErrorKind(err: unknown, ...kinds: GitErrorKind[]): boolean {
+  return err instanceof GitCommandError && kinds.includes(err.kind);
+}
 
 export class GitService {
   private repoRootCache = new Map<string, string | null>();
   private remoteUrlCache = new Map<string, string | null>();
+  private currentUserEmailCache = new Map<string, string | null>();
+  private ignoreRevsCache = new Map<string, string | null>();
+  /** Repos whose ignore-revs file made git fail; blamed without it from then on. */
+  private brokenIgnoreRevs = new Set<string>();
+
   private blameCache = new Map<string, BlameInfo>();
   private blameCacheByFile = new Map<string, Set<string>>();
-  private currentUserEmailCache = new Map<string, string | null>();
-  private pendingFullBlame = new Map<string, Promise<Map<number, BlameInfo> | null>>();
+  private cacheKeyToFile = new Map<string, string>();
+  private pendingFullBlame = new Map<string, PendingFullBlame>();
+  /** Holds `${file}:${version}` (whole file failed) and `${file}:${version}:${line}` (one line failed). */
   private failedBlame = new Set<string>();
+  /** Files whose whole-file blame timed out; they use single-line blame from then on. */
+  private slowFullBlameFiles = new Set<string>();
+
+  // Results that finish after a cache clear must not be written back.
+  private globalGeneration = 0;
+  private fileGeneration = new Map<string, number>();
+
+  private options: GitServiceOptions = {
+    remoteName: "",
+    useIgnoreRevsFile: true,
+  };
+  private timeouts: GitServiceTimeouts;
+
+  constructor(timeouts: Partial<GitServiceTimeouts> = {}) {
+    this.timeouts = {
+      fullBlameMs: 5000,
+      lineBlameMs: 10000,
+      defaultMs: 5000,
+      ...timeouts,
+    };
+  }
+
+  public setOptions(options: GitServiceOptions) {
+    if (
+      options.remoteName === this.options.remoteName &&
+      options.useIgnoreRevsFile === this.options.useIgnoreRevsFile
+    ) {
+      return;
+    }
+    this.options = { ...options };
+    this.clearCache();
+  }
 
   /**
-   * Clears the blame cache (e.g. on file save, document change, or file close).
+   * Clears blame results for one file, or everything when no file is given.
    */
   public clearCache(filePath?: string) {
-    if (filePath) {
-      const keys = this.blameCacheByFile.get(filePath);
-      if (keys) {
-        for (const key of keys) {
-          this.blameCache.delete(key);
-          this.cacheKeyToFile.delete(key);
-        }
-        this.blameCacheByFile.delete(filePath);
+    if (filePath === undefined) {
+      this.globalGeneration++;
+      for (const pending of this.pendingFullBlame.values()) {
+        pending.controller.abort();
       }
-      for (const key of this.failedBlame) {
-        if (key.startsWith(filePath)) {
-          this.failedBlame.delete(key);
-        }
-      }
-      for (const key of this.pendingFullBlame.keys()) {
-        if (key.startsWith(filePath)) {
-          this.pendingFullBlame.delete(key);
-        }
-      }
-    } else {
+      this.pendingFullBlame.clear();
       this.blameCache.clear();
       this.blameCacheByFile.clear();
       this.cacheKeyToFile.clear();
       this.failedBlame.clear();
-      this.pendingFullBlame.clear();
       this.currentUserEmailCache.clear();
+      this.remoteUrlCache.clear();
+      this.ignoreRevsCache.clear();
+      this.brokenIgnoreRevs.clear();
+      return;
+    }
+
+    const current = this.fileGeneration.get(filePath);
+    this.fileGeneration.set(filePath, current === undefined ? 1 : current + 1);
+
+    const keys = this.blameCacheByFile.get(filePath);
+    if (keys) {
+      for (const key of keys) {
+        this.blameCache.delete(key);
+        this.cacheKeyToFile.delete(key);
+      }
+      this.blameCacheByFile.delete(filePath);
+    }
+
+    const prefix = `${filePath}:`;
+    for (const key of this.failedBlame) {
+      if (key.startsWith(prefix)) {
+        this.failedBlame.delete(key);
+      }
+    }
+    for (const [key, pending] of this.pendingFullBlame) {
+      if (key.startsWith(prefix)) {
+        pending.controller.abort();
+        this.pendingFullBlame.delete(key);
+      }
     }
   }
 
   /**
-   * Disposes all git caches to release memory.
+   * Clears blame results for every file inside a repository (e.g. after HEAD moved).
    */
-  public dispose() {
-    this.blameCache.clear();
-    this.blameCacheByFile.clear();
-    this.cacheKeyToFile.clear();
-    this.failedBlame.clear();
-    this.pendingFullBlame.clear();
-    this.repoRootCache.clear();
-    this.remoteUrlCache.clear();
+  public clearRepoCache(repoRoot: string) {
+    const prefix = repoRoot.endsWith(path.sep) ? repoRoot : repoRoot + path.sep;
+    const files = new Set<string>(this.blameCacheByFile.keys());
+    for (const key of [...this.failedBlame, ...this.pendingFullBlame.keys()]) {
+      files.add(this.fileOfKey(key));
+    }
+    for (const file of files) {
+      if (file.startsWith(prefix)) {
+        this.clearCache(file);
+      }
+    }
+    // Small per-repo lookups; rebuilding them costs one git call each.
     this.currentUserEmailCache.clear();
+    this.remoteUrlCache.clear();
+    this.ignoreRevsCache.clear();
+    this.brokenIgnoreRevs.clear();
+  }
+
+  public dispose() {
+    this.clearCache();
+    this.repoRootCache.clear();
+    this.slowFullBlameFiles.clear();
+    this.fileGeneration.clear();
   }
 
   /**
@@ -67,14 +205,7 @@ export class GitService {
     documentVersion: number,
     line: number,
   ): boolean {
-    const cacheKey = `${filePath}:${documentVersion}:${line}`;
-    const cached = this.blameCache.get(cacheKey);
-    if (cached !== undefined) {
-      this.blameCache.delete(cacheKey);
-      this.blameCache.set(cacheKey, cached);
-      return true;
-    }
-    return false;
+    return this.touchCache(`${filePath}:${documentVersion}:${line}`) !== undefined;
   }
 
   /**
@@ -98,20 +229,48 @@ export class GitService {
   }
 
   /**
-   * Retrieves remote base URL (e.g. origin remote) for a repository root.
+   * Retrieves the URL of the configured remote (`origin` or the first remote by default).
    */
   public async getRemoteBaseUrl(repoRoot: string): Promise<string | null> {
-    if (!this.remoteUrlCache.has(repoRoot)) {
+    if (this.remoteUrlCache.has(repoRoot)) {
+      return this.remoteUrlCache.get(repoRoot)!;
+    }
+
+    let url: string | null = null;
+    const remoteName = await this.resolveRemoteName(repoRoot);
+    if (remoteName !== null) {
       try {
-        const rawRemote = (
-          await this.execGit(["remote", "get-url", "origin"], repoRoot)
+        const output = (
+          await this.execGit(["remote", "get-url", remoteName], repoRoot)
         ).trim();
-        this.remoteUrlCache.set(repoRoot, rawRemote);
+        if (output.length > 0) {
+          url = output;
+        }
       } catch {
-        this.remoteUrlCache.set(repoRoot, null);
+        // Remote doesn't exist
       }
     }
-    return this.remoteUrlCache.get(repoRoot) ?? null;
+
+    this.remoteUrlCache.set(repoRoot, url);
+    return url;
+  }
+
+  private async resolveRemoteName(repoRoot: string): Promise<string | null> {
+    if (this.options.remoteName.length > 0) {
+      return this.options.remoteName;
+    }
+    try {
+      const remotes = (await this.execGit(["remote"], repoRoot))
+        .split("\n")
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0);
+      if (remotes.includes("origin")) {
+        return "origin";
+      }
+      return remotes.length > 0 ? remotes[0] : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -181,181 +340,309 @@ export class GitService {
   }
 
   /**
-   * Blames a specific line (0-indexed) with hybrid full-file caching and process cancellation.
+   * Blames one line (0-indexed). Files up to 2500 lines are blamed whole once per
+   * document version (dirty buffers via `--contents -`); larger files, and files whose
+   * whole-file blame timed out, use `-L <line>,<line>`.
    */
   public async getBlameForLine(
-    filePath: string,
-    line: number,
-    documentVersion: number,
-    documentText?: string,
-    isDirty: boolean = false,
-    lineCount?: number,
+    request: BlameRequest,
     signal?: AbortSignal,
   ): Promise<BlameInfo | null> {
-    const cacheKey = `${filePath}:${documentVersion}:${line}`;
-    const cached = this.blameCache.get(cacheKey);
+    const { filePath, line, documentVersion, lineCount, isDirty } = request;
+    const fileVersionKey = `${filePath}:${documentVersion}`;
+    const cacheKey = `${fileVersionKey}:${line}`;
+
+    const cached = this.touchCache(cacheKey);
     if (cached !== undefined) {
-      this.blameCache.delete(cacheKey);
-      this.blameCache.set(cacheKey, cached);
       return cached;
     }
 
-    if (signal?.aborted) {
+    if (
+      signal?.aborted ||
+      this.failedBlame.has(fileVersionKey) ||
+      this.failedBlame.has(cacheKey)
+    ) {
       return null;
     }
 
-    const fileVersionKey = `${filePath}:${documentVersion}`;
-    if (this.failedBlame.has(fileVersionKey)) {
-      return null;
-    }
+    // Read before any await so the text matches documentVersion.
+    const contents = isDirty ? request.getText() : undefined;
+    const generation = this.generationOf(filePath);
 
     const repoRoot = await this.getRepoRoot(filePath);
     if (!repoRoot || signal?.aborted) {
       return null;
     }
 
-    const shouldBlameFullFile =
-      !isDirty && lineCount !== undefined && lineCount <= 2500;
+    const [currentUserEmail, rawRemote, ignoreRevsFile] = await Promise.all([
+      this.getCurrentUserEmail(repoRoot),
+      this.getRemoteBaseUrl(repoRoot),
+      this.getIgnoreRevsFile(repoRoot),
+    ]);
+    if (signal?.aborted) {
+      return null;
+    }
+
+    const context: BlameContext = {
+      filePath,
+      repoRoot,
+      isDirty,
+      currentUserEmail,
+      rawRemote,
+      ignoreRevsFile,
+    };
+
+    if (
+      lineCount <= FULL_BLAME_MAX_LINES &&
+      !this.slowFullBlameFiles.has(filePath)
+    ) {
+      try {
+        const map = await this.getFullBlame(
+          fileVersionKey,
+          contents,
+          context,
+          generation,
+        );
+        if (signal?.aborted) {
+          return null;
+        }
+        const blame = map.get(line);
+        return blame === undefined ? null : blame;
+      } catch (err) {
+        if (signal?.aborted || isErrorKind(err, "aborted")) {
+          return null;
+        }
+        if (!isErrorKind(err, "timeout")) {
+          this.markFailed(filePath, fileVersionKey, generation);
+          return null;
+        }
+        // Deep history: fall through to single-line blame for this file.
+        this.slowFullBlameFiles.add(filePath);
+      }
+    }
 
     try {
-      const [currentUserEmail, rawRemote] = await Promise.all([
-        this.getCurrentUserEmail(repoRoot),
-        this.getRemoteBaseUrl(repoRoot),
-      ]);
-
+      const lineNum = line + 1; // git blame is 1-indexed
+      const output = await this.runBlame(
+        context,
+        ["-L", `${lineNum},${lineNum}`],
+        contents,
+        signal,
+        this.timeouts.lineBlameMs,
+      );
       if (signal?.aborted) {
         return null;
       }
 
-      if (shouldBlameFullFile) {
-        let fullBlamePromise = this.pendingFullBlame.get(fileVersionKey);
-        if (!fullBlamePromise) {
-          fullBlamePromise = (async () => {
-            try {
-              const output = await this.execGit(
-                ["blame", "--porcelain", "--", filePath],
-                repoRoot,
-                undefined,
-              );
-              const map = this.parsePorcelain(output, repoRoot);
-              let fileMtime: Date | undefined;
-
-              for (const blame of map.values()) {
-                if (blame.isUncommitted && !isDirty) {
-                  if (!fileMtime) {
-                    try {
-                      const stat = await fs.promises.stat(filePath);
-                      fileMtime = stat.mtime;
-                    } catch {
-                      // Keep default timestamp
-                    }
-                  }
-                  if (fileMtime) {
-                    blame.authorDate = fileMtime;
-                    blame.committerDate = fileMtime;
-                  }
-                }
-
-                blame.isCurrentUser =
-                  blame.isUncommitted ||
-                  this.isCurrentUser(blame.authorEmail, currentUserEmail);
-
-                if (rawRemote && !blame.isUncommitted) {
-                  const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
-                  if (remoteUrl) {
-                    blame.remoteCommitUrl = remoteUrl;
-                  }
-                }
-
-                this.setBlameCache(
-                  filePath,
-                  `${filePath}:${documentVersion}:${blame.line}`,
-                  blame,
-                );
-              }
-              return map;
-            } catch {
-              this.failedBlame.add(fileVersionKey);
-              return null;
-            } finally {
-              this.pendingFullBlame.delete(fileVersionKey);
-            }
-          })();
-          this.pendingFullBlame.set(fileVersionKey, fullBlamePromise);
-        }
-
-        const map = await fullBlamePromise;
-        if (signal?.aborted || !map) {
-          return null;
-        }
-
-        return map.get(line) ?? null;
-      } else {
-        const lineNum = line + 1; // 1-indexed for git
-        const args = ["blame"];
-
-        if (isDirty && documentText !== undefined) {
-          args.push("--contents", "-");
-        }
-
-        args.push("-L", `${lineNum},${lineNum}`, "--porcelain", "--", filePath);
-
-        const output = await this.execGit(
-          args,
-          repoRoot,
-          isDirty && documentText !== undefined ? documentText : undefined,
-          signal,
-        );
-
-        if (signal?.aborted) {
-          return null;
-        }
-
-        const map = this.parsePorcelain(output, repoRoot);
-        const blame = map.get(line) ?? map.values().next().value;
-
-        if (blame) {
-          if (blame.isUncommitted && !isDirty) {
-            try {
-              const stat = await fs.promises.stat(filePath);
-              blame.authorDate = stat.mtime;
-              blame.committerDate = stat.mtime;
-            } catch {
-              // Keep default timestamp
-            }
-          }
-
-          blame.isCurrentUser =
-            blame.isUncommitted ||
-            this.isCurrentUser(blame.authorEmail, currentUserEmail);
-
-          if (rawRemote && !blame.isUncommitted) {
-            const remoteUrl = this.formatCommitWebUrl(rawRemote, blame.sha);
-            if (remoteUrl) {
-              blame.remoteCommitUrl = remoteUrl;
-            }
-          }
-
-          this.setBlameCache(filePath, cacheKey, blame);
-        }
-
-        return blame ?? null;
+      const blame = this.parsePorcelain(output, repoRoot).get(line);
+      if (blame === undefined) {
+        return null;
       }
-    } catch {
-      if (!signal?.aborted) {
-        this.failedBlame.add(fileVersionKey);
+
+      const uncommittedDate =
+        blame.isUncommitted && !isDirty
+          ? await this.readMtime(filePath)
+          : undefined;
+      this.enrich(blame, context, uncommittedDate);
+
+      if (this.generationOf(filePath) === generation) {
+        this.setBlameCache(filePath, cacheKey, blame);
       }
+      return blame;
+    } catch (err) {
+      if (signal?.aborted || isErrorKind(err, "aborted", "timeout")) {
+        return null;
+      }
+      // "has only N lines": the cursor is on the trailing empty line, not a broken file.
+      const lineOnly =
+        err instanceof GitCommandError && /has only \d+ lines?/.test(err.stderr);
+      this.markFailed(filePath, lineOnly ? cacheKey : fileVersionKey, generation);
       return null;
     }
   }
 
-  private cacheKeyToFile = new Map<string, string>();
+  private getFullBlame(
+    fileVersionKey: string,
+    contents: string | undefined,
+    context: BlameContext,
+    generation: string,
+  ): Promise<Map<number, BlameInfo>> {
+    const existing = this.pendingFullBlame.get(fileVersionKey);
+    if (existing) {
+      return existing.promise;
+    }
+
+    const { filePath } = context;
+    const controller = new AbortController();
+    const promise = (async () => {
+      try {
+        const output = await this.runBlame(
+          context,
+          [],
+          contents,
+          controller.signal,
+          this.timeouts.fullBlameMs,
+        );
+        const map = this.parsePorcelain(output, context.repoRoot);
+
+        let uncommittedDate: Date | undefined;
+        if (!context.isDirty) {
+          for (const blame of map.values()) {
+            if (blame.isUncommitted) {
+              uncommittedDate = await this.readMtime(filePath);
+              break;
+            }
+          }
+        }
+
+        const isCurrent = this.generationOf(filePath) === generation;
+        for (const blame of map.values()) {
+          this.enrich(blame, context, uncommittedDate);
+          if (isCurrent) {
+            this.setBlameCache(filePath, `${fileVersionKey}:${blame.line}`, blame);
+          }
+        }
+        return map;
+      } finally {
+        if (this.pendingFullBlame.get(fileVersionKey)?.controller === controller) {
+          this.pendingFullBlame.delete(fileVersionKey);
+        }
+      }
+    })();
+
+    this.pendingFullBlame.set(fileVersionKey, { promise, controller });
+    return promise;
+  }
+
+  private async runBlame(
+    context: BlameContext,
+    extraArgs: string[],
+    contents: string | undefined,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+  ): Promise<string> {
+    const { repoRoot, filePath, ignoreRevsFile } = context;
+    const useIgnoreRevs =
+      ignoreRevsFile !== null && !this.brokenIgnoreRevs.has(repoRoot);
+
+    const buildArgs = (withIgnoreRevs: boolean): string[] => {
+      const args = ["blame", "--porcelain", ...extraArgs];
+      if (contents !== undefined) {
+        args.push("--contents", "-");
+      }
+      if (withIgnoreRevs && ignoreRevsFile !== null) {
+        args.push("--ignore-revs-file", ignoreRevsFile);
+      }
+      args.push("--", filePath);
+      return args;
+    };
+
+    const execOptions: ExecOptions = { stdin: contents, signal, timeoutMs };
+    try {
+      return await this.execGit(buildArgs(useIgnoreRevs), repoRoot, execOptions);
+    } catch (err) {
+      // A malformed line in the ignore-revs file makes git exit before blaming.
+      const ignoreRevsRejected =
+        useIgnoreRevs &&
+        err instanceof GitCommandError &&
+        err.kind === "exit" &&
+        /invalid object name|could not open object name list/.test(err.stderr);
+      if (!ignoreRevsRejected) {
+        throw err;
+      }
+      this.brokenIgnoreRevs.add(repoRoot);
+      return this.execGit(buildArgs(false), repoRoot, execOptions);
+    }
+  }
+
+  /**
+   * Fills the fields that need repository context: current user, remote link, and
+   * the on-disk mtime for saved-but-uncommitted lines (git reports "now" for those).
+   */
+  private enrich(
+    blame: BlameInfo,
+    context: BlameContext,
+    uncommittedDate: Date | undefined,
+  ) {
+    if (blame.isUncommitted && uncommittedDate !== undefined) {
+      blame.authorDate = uncommittedDate;
+      blame.committerDate = uncommittedDate;
+    }
+
+    blame.isCurrentUser =
+      blame.isUncommitted ||
+      this.isCurrentUser(blame.authorEmail, context.currentUserEmail);
+
+    if (context.rawRemote !== null && !blame.isUncommitted) {
+      const remoteUrl = this.formatCommitWebUrl(context.rawRemote, blame.sha);
+      if (remoteUrl !== null) {
+        blame.remoteCommitUrl = remoteUrl;
+      }
+    }
+  }
+
+  private async readMtime(filePath: string): Promise<Date | undefined> {
+    try {
+      return (await fs.promises.stat(filePath)).mtime;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async getIgnoreRevsFile(repoRoot: string): Promise<string | null> {
+    if (!this.options.useIgnoreRevsFile) {
+      return null;
+    }
+    if (this.ignoreRevsCache.has(repoRoot)) {
+      return this.ignoreRevsCache.get(repoRoot)!;
+    }
+
+    const candidate = path.join(repoRoot, ".git-blame-ignore-revs");
+    let resolved: string | null = null;
+    try {
+      await fs.promises.access(candidate, fs.constants.R_OK);
+      resolved = candidate;
+    } catch {
+      // No ignore-revs file in this repository
+    }
+    this.ignoreRevsCache.set(repoRoot, resolved);
+    return resolved;
+  }
+
+  private markFailed(filePath: string, key: string, generation: string) {
+    if (this.generationOf(filePath) === generation) {
+      this.failedBlame.add(key);
+    }
+  }
+
+  private generationOf(filePath: string): string {
+    const fileGen = this.fileGeneration.get(filePath);
+    return `${this.globalGeneration}:${fileGen === undefined ? 0 : fileGen}`;
+  }
+
+  /** Cache keys look like `${file}:${version}` or `${file}:${version}:${line}`. */
+  private fileOfKey(key: string): string {
+    const versionAt = key.match(/:\d+(?::\d+)?$/);
+    return versionAt === null || versionAt.index === undefined
+      ? key
+      : key.slice(0, versionAt.index);
+  }
+
+  /** Returns a cached entry and marks it most recently used. */
+  private touchCache(cacheKey: string): BlameInfo | undefined {
+    const cached = this.blameCache.get(cacheKey);
+    if (cached !== undefined) {
+      this.blameCache.delete(cacheKey);
+      this.blameCache.set(cacheKey, cached);
+    }
+    return cached;
+  }
 
   /**
    * Sets blame into memory cache with LRU eviction guard.
    */
   private setBlameCache(filePath: string, key: string, blame: BlameInfo) {
-    if (this.blameCache.size >= 5000) {
+    if (this.blameCache.size >= CACHE_LIMIT) {
       const oldestKey = this.blameCache.keys().next().value;
       if (oldestKey) {
         this.blameCache.delete(oldestKey);
@@ -393,29 +680,27 @@ export class GitService {
       return this.currentUserEmailCache.get(repoRoot)!;
     }
 
+    let email: string | null = null;
     try {
-      const email = (await this.execGit(["config", "user.email"], repoRoot))
+      const configured = (await this.execGit(["config", "user.email"], repoRoot))
         .trim()
         .replace(/^["']|["']$/g, "");
-
-      const resolvedEmail = email || process.env.GIT_AUTHOR_EMAIL || "";
-
-      if (!resolvedEmail) {
-        this.currentUserEmailCache.set(repoRoot, null);
-        return null;
+      if (configured.length > 0) {
+        email = configured;
       }
-
-      this.currentUserEmailCache.set(repoRoot, resolvedEmail);
-      return resolvedEmail;
     } catch {
-      const fallbackEmail = process.env.GIT_AUTHOR_EMAIL || "";
-      if (fallbackEmail) {
-        this.currentUserEmailCache.set(repoRoot, fallbackEmail);
-        return fallbackEmail;
-      }
-      this.currentUserEmailCache.set(repoRoot, null);
-      return null;
+      // git exits with 1 when user.email is unset
     }
+
+    if (email === null) {
+      const envEmail = process.env.GIT_AUTHOR_EMAIL;
+      if (envEmail !== undefined && envEmail.length > 0) {
+        email = envEmail;
+      }
+    }
+
+    this.currentUserEmailCache.set(repoRoot, email);
+    return email;
   }
 
   /**
@@ -443,24 +728,6 @@ export class GitService {
       cleanAuthorEmail.length > 0 &&
       cleanCurrentEmail === cleanAuthorEmail
     );
-  }
-
-  /**
-   * Fetches full commit details (subject, body, stats) for hover or quick pick.
-   */
-  public async getCommitDetails(
-    repoRoot: string,
-    sha: string,
-  ): Promise<string | null> {
-    try {
-      const output = await this.execGit(
-        ["show", "-s", "--format=%B", sha],
-        repoRoot,
-      );
-      return output.trim();
-    } catch {
-      return null;
-    }
   }
 
   /**
@@ -618,17 +885,21 @@ export class GitService {
   }
 
   /**
-   * Helper to execute git command safely with AbortSignal cancellation support.
+   * Runs git with a timeout, optional stdin, and AbortSignal cancellation.
+   * Rejects with a GitCommandError whose `kind` tells callers whether a retry makes sense.
    */
   private execGit(
     args: string[],
     cwd: string,
-    stdin?: string,
-    signal?: AbortSignal,
+    options: ExecOptions = {},
   ): Promise<string> {
+    const { stdin, signal } = options;
+    const timeoutMs =
+      options.timeoutMs === undefined ? this.timeouts.defaultMs : options.timeoutMs;
+
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
-        return reject(new Error("Git command aborted"));
+        return reject(new GitCommandError("Git command aborted", "aborted"));
       }
 
       let isSettled = false;
@@ -641,37 +912,37 @@ export class GitService {
         },
       });
 
-      const cleanup = () => {
+      const settle = (error: GitCommandError | null, output?: string) => {
+        if (isSettled) {
+          return;
+        }
+        isSettled = true;
         clearTimeout(timer);
         if (signal) {
           signal.removeEventListener("abort", onAbort);
         }
+        if (error) {
+          if (error.kind === "aborted" || error.kind === "timeout") {
+            try {
+              proc.kill();
+            } catch {
+              // ignore
+            }
+          }
+          reject(error);
+        } else {
+          resolve(output === undefined ? "" : output);
+        }
       };
 
       const timer = setTimeout(() => {
-        if (!isSettled) {
-          isSettled = true;
-          cleanup();
-          try {
-            proc.kill();
-          } catch {
-            // ignore
-          }
-          reject(new Error(`Git command timed out: git ${args.join(" ")}`));
-        }
-      }, 5000);
+        settle(
+          new GitCommandError(`Git command timed out: git ${args.join(" ")}`, "timeout"),
+        );
+      }, timeoutMs);
 
       const onAbort = () => {
-        if (!isSettled) {
-          isSettled = true;
-          cleanup();
-          try {
-            proc.kill();
-          } catch {
-            // ignore
-          }
-          reject(new Error("Git command aborted"));
-        }
+        settle(new GitCommandError("Git command aborted", "aborted"));
       };
 
       if (signal) {
@@ -690,22 +961,16 @@ export class GitService {
       });
 
       proc.on("error", (err) => {
-        if (!isSettled) {
-          isSettled = true;
-          cleanup();
-          reject(err);
-        }
+        settle(new GitCommandError(err.message, "spawn"));
       });
 
       proc.on("close", (code) => {
-        if (!isSettled) {
-          isSettled = true;
-          cleanup();
-          if (code === 0) {
-            resolve(Buffer.concat(stdoutChunks).toString("utf8"));
-          } else {
-            reject(new Error(`Git exited with code ${code}: ${stderr}`));
-          }
+        if (code === 0) {
+          settle(null, Buffer.concat(stdoutChunks).toString("utf8"));
+        } else {
+          settle(
+            new GitCommandError(`Git exited with code ${code}: ${stderr}`, "exit", stderr),
+          );
         }
       });
 

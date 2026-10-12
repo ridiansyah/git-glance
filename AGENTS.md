@@ -20,9 +20,9 @@
 - **Runtime & Target**: VS Code Extension API (`^1.85.0`), Node.js (v20+ / v22+).
 - **Package Manager**: `pnpm` (run with `pnpm install`, `pnpm run compile`, `pnpm test`).
 - **Language**: TypeScript (ES2022 target, strict mode enabled).
-- **Bundler**: `esbuild` (Ultra-fast CJS bundling into `dist/extension.js`, externalizing `vscode`).
-- **Packaging**: `@vscode/vsce` (Produces ultra-compact `.vsix` package under ~25 KB minified bundle / ~31 KB total package with icon).
-- **Testing**: Built-in `node:test` runner (`pnpm test`) compiling tests on the fly via `esbuild`.
+- **Bundler**: `esbuild` (CJS bundle into `dist/extension.js`, externalizing `vscode`, `--target=node18` to match the Node runtime of VS Code 1.85's Electron).
+- **Packaging**: `@vscode/vsce` (~34 KB minified bundle / ~38 KB total `.vsix` with icon).
+- **Testing**: Built-in `node:test` runner (`pnpm test`) compiling tests on the fly via `esbuild`. Pure-function tests live in `unit.test.ts`; `git-service.test.ts` runs `GitService` against real temporary git repositories.
 
 ---
 
@@ -47,18 +47,19 @@ git-glance/
 ├── images/
 │   └── icon.png             # Official 256x256 extension marketplace icon
 ├── src/
-│   ├── extension.ts         # Extension activation/deactivation entrypoint
+│   ├── extension.ts         # Activation entrypoint & vscode.git HEAD watcher (external commits)
 │   ├── glance-controller.ts # Orchestrates editor events & cursor debouncing
-│   ├── git.ts               # Git CLI executor, porcelain parser, cache, & remote URL resolver
+│   ├── git.ts               # Git CLI executor (typed errors), porcelain parser, cache, remote & ignore-revs resolver
 │   ├── decoration.ts        # TextEditorDecorationType management & Markdown hover builder
 │   ├── commands.ts          # VS Code command registrations (toggle, toggleAvatar, copyHash, details, remote)
-│   ├── types.ts             # TypeScript interfaces (BlameInfo, GitGlanceConfig, GlancePreset, DateStyle)
+│   ├── types.ts             # TypeScript interfaces (BlameInfo, BlameRequest, GitServiceOptions, GitGlanceConfig, ...)
 │   ├── utils/
-│   │   ├── avatar.ts        # 14x14 SVG initials generator & multi-source avatar resolver (GitHub, Gravatar, GitLab)
+│   │   ├── avatar.ts        # 14x14 SVG initials generator & email-verified avatar resolver (GitHub, Gravatar)
 │   │   ├── date.ts          # Human-friendly relative time, short date, and ISO date formatters
-│   │   └── format.ts        # Preset registry (default, minimalist, playful, etc.) & string interpolator
+│   │   └── format.ts        # Preset registry, string interpolator, truncation & markdown escaping
 │   └── test/
-│       └── unit.test.ts     # Fast unit tests for utilities and parsers
+│       ├── unit.test.ts         # Fast unit tests for utilities and parsers
+│       └── git-service.test.ts  # GitService integration tests against temporary git repos
 ├── .gitignore
 ├── .vscodeignore            # Excludes src/, dev files, and tests from .vsix package
 ├── CHANGELOG.md             # Standard Keep a Changelog release history
@@ -98,10 +99,13 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
   - Cache files use `_v4.svg` suffix to guarantee cache invalidation.
 - **Avatar Resolution Strategy**:
   1. Local initials SVG (14x14) generated synchronously for instant display.
-  2. Background remote fetch waterfall: GitHub noreply email username -> Gravatar MD5 -> GitHub username handle -> GitLab handle.
-  3. Live reactive update: Once remote photo is downloaded and converted to 14x14 SVG, `AvatarService` notifies `GlanceController` via `onAvatarReady` to re-render the active editor line without requiring cursor movements.
+  2. Background remote fetch waterfall, **only from sources tied to the commit email**: GitHub noreply email username -> GitHub commit API `repos/{owner}/{repo}/commits/{sha}` → `author.avatar_url` (github.com remotes only) -> Gravatar MD5.
+  3. **NEVER guess a GitHub/GitLab handle from the author name.** `github.com/<name>.png` for a name like `John` or `admin` returns an unrelated account's photo.
+  4. When every source answers "no photo", a `${hash}_none_v4` marker is written and the lookup is skipped for 7 days. Network errors, timeouts and rate limits (403/429) do not write the marker.
+  5. Live reactive update: Once remote photo is downloaded and converted to 14x14 SVG, `AvatarService` notifies `GlanceController` via `onAvatarReady` to re-render the active editor line without requiring cursor movements.
 - **Avatar Configuration & Toggle**:
   - `gitGlance.showAvatar` (boolean, default: `true`): Master switch to toggle avatar visibility.
+  - `gitGlance.avatarSource` (`"remote"` | `"initials"`, default: `"remote"`): `"initials"` never touches the network and ignores previously downloaded photos.
   - `gitGlance.toggleAvatar` command: Quickly toggle avatar visibility on/off via Command Palette.
 - **Colors**: Never hardcode hex colors in code. Always use `new vscode.ThemeColor('gitGlance.inlineColor')`, which falls back to theme-adaptive defaults defined in `package.json` (`#88888888` on dark, `#66666688` on light).
 - **Default Visual Style (User Default)**:
@@ -126,7 +130,8 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
 
 ### 3.2 Rich Interactive Hover Card
 
-- Built with `vscode.MarkdownString` with `supportThemeIcons = true`, `isTrusted = true`, and `supportHtml = true`.
+- Built with `vscode.MarkdownString` with `supportThemeIcons = true`, `isTrusted = { enabledCommands: ["gitGlance.copyHash", "gitGlance.showCommitDetails"] }`, and **`supportHtml = false`**.
+- **Untrusted Text Rule**: author names, emails and commit messages come from other people. Always pass them through `escapeMarkdown` (escapes markdown syntax plus `<`, `>`, `&`). Never enable `supportHtml`: a commit message containing `<img src=...>` would load a remote image on hover. Use literal ` ` instead of `&nbsp;` for spacing.
 - **Uncommitted Lines Policy**: Returns `undefined` so that no hover popup appears on uncommitted lines, keeping the editor distraction-free while typing.
 - Uses native VS Code Codicons (`$(...)`) instead of emoticons or external SVGs:
   - Zero disk I/O, zero network, zero decoding latency (instant 0 ms render).
@@ -150,7 +155,7 @@ When `gitGlance.preset` is set to `"custom"`, users can freely compose their inl
 - `${time}`: Relative or styled date according to `gitGlance.dateStyle` (e.g. `3 days ago`)
 - `${date}`: Formatted short date (e.g. `Sep 25, 2026`)
 - `${isoDate}`: Full ISO date (`2026-09-25 14:10`)
-- `${message}`: Commit subject summary
+- `${message}`: Commit subject summary, shortened to `gitGlance.maxMessageLength` code points with `…` (default `60`, `0` = no limit) via `truncateText`
 - `${hash}` / `${shortHash}`: 7-character commit SHA
 - `${fullHash}`: Full 40-character commit SHA
 - `${prefix}`: Configured prefix text/emoji
@@ -186,20 +191,30 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
 ### 4.2 Git CLI & Blame Execution Rules
 
 - **Hybrid Blame Execution & Caching Strategy**:
-  - **Clean saved documents ($\le 2500$ lines)**: `GitService` executes whole-file blame `git blame --porcelain -- <filePath>` once per document version and populates all lines into memory. Subsequent cursor moves to any line in that file resolve in **0ms (instant memory lookup)** with **zero spawned subprocesses**.
-  - **Dirty documents or large files ($> 2500$ lines)**: Uses targeted single-line blame `git blame -L <line>,<line> --porcelain -- <filePath>`. Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
-- **In-Flight Subprocess Cancellation (`AbortSignal`)**: Always pass an `AbortSignal` to `execGit`. When the user rapidly moves cursor or navigates lines, any pending `git blame` command for a previous line is immediately terminated with `proc.kill("SIGTERM")` to prevent queuing obsolete background processes.
+  - **Documents $\le 2500$ lines (clean or dirty)**: `GitService` executes whole-file blame `git blame --porcelain -- <filePath>` once per document version (dirty buffers add `--contents -`) and populates all lines into memory. Subsequent cursor moves to any line in that version resolve in **0ms (instant memory lookup)** with **zero spawned subprocesses**.
+  - **Large files ($> 2500$ lines) or files whose whole-file blame timed out** (`slowFullBlameFiles`): Uses targeted single-line blame `git blame -L <line>,<line> --porcelain -- <filePath>`. Lines in VS Code are 0-indexed; `git blame` is 1-indexed (always add +1).
+  - `getBlameForLine` takes a `BlameRequest` whose `getText` is called lazily — only after a cache miss and **before the first `await`**, so the text always matches `documentVersion` and cache hits never copy the document.
+- **Typed Git Errors & Timeouts**: `execGit` rejects with `GitCommandError` (`kind`: `aborted` | `timeout` | `exit` | `spawn`, plus `stderr`). Timeouts: whole-file blame 5 s, single-line blame 10 s, other commands 5 s (`GitService` constructor accepts overrides for tests).
+  - Only `exit` / `spawn` errors are negative-cached. `aborted` and `timeout` are transient and never cached.
+  - A whole-file `timeout` falls back to single-line blame immediately and marks the file in `slowFullBlameFiles`.
+  - `fatal: file X has only N lines` (cursor on the trailing empty line) negative-caches **only that line key**, never the whole file version.
+- **In-Flight Subprocess Cancellation (`AbortSignal`)**: Always pass an `AbortSignal` to `execGit`. When the user rapidly moves cursor or navigates lines, any pending `git blame` command for a previous line is immediately terminated with `proc.kill("SIGTERM")` to prevent queuing obsolete background processes. Whole-file blames own a separate `AbortController` (not tied to cursor moves) that `clearCache(file)` aborts.
+- **`.git-blame-ignore-revs`** (`gitGlance.useIgnoreRevsFile`, default `true`): when the file exists at the repository root, blame adds `--ignore-revs-file <path>`. If git rejects it (`invalid object name` / `could not open object name list`), the blame is retried without it and the repo is added to `brokenIgnoreRevs`.
+- **Remote Selection** (`gitGlance.remote`, default `""`): empty = `origin`, else the first remote from `git remote`. `GlanceController` pushes `remote` and `useIgnoreRevsFile` to `GitService.setOptions`, which clears all caches when they change.
 - **Zero-Debounce on Cache Hit**: In `GlanceController.onSelectionChange`, if the target line is already in `blameCache` (`gitService.hasCachedBlame`), render the inline decoration immediately on the current event turn, bypassing the 100ms debounce timer for a snappy, instantaneous experience.
 - **Interactive Hanging Prevention**: Always execute git subprocesses with `GIT_TERMINAL_PROMPT: "0"` in the process environment to prevent background git commands from hanging indefinitely on credential or passphrase prompts.
 - **Unsaved / Dirty Document Handling**: When the document is dirty (`document.isDirty`), pass document contents through stdin using `--contents -`.
+- **Synthesized Blame While Typing**: when an edit touches the active line, that line already showed a blame (proves the file is tracked), and the document is still dirty, `GlanceController` renders `createUncommittedBlame(line)` immediately **without spawning git**. If the edit makes the buffer clean again (undo to saved state), it falls back to a debounced real blame.
 - **Accurate Uncommitted Timestamps via `fs.stat.mtime`**: Git's internal C implementation of `git blame` assigns `time(NULL)` (`Date.now()`) to all uncommitted lines. To prevent uncommitted lines from perpetually displaying `"just now"` across editor re-blames, `GitService` reads `(await fs.promises.stat(filePath)).mtime` when `isUncommitted && !isDirty`. When the document is dirty in memory, it reflects the active typing session, and once saved, preserves the actual disk file modification timestamp (e.g. `3 hours ago`, `yesterday`).
 - **Real-Time Active Line Editing Reactivity**: Listen to `vscode.workspace.onDidChangeTextDocument` to immediately detect edits affecting the current active line, invalidating the current blame and scheduling a debounced re-blame so uncommitted status (`uncommitted changes`) displays in real time without waiting for cursor line jumps.
 - **In-Memory Caching, Invalidation & Cleanup**:
   - Cache blame results keyed by `${filePath}:${documentVersion}:${line}` with a 5,000-entry true LRU limit (re-inserted on cache hits to guarantee actual least-recently-used eviction order).
   - Dual-index architecture: `blameCacheByFile` (`Map<string, Set<string>>`) and `cacheKeyToFile` (`Map<string, string>`) enable $O(1)$ file-scoped cache eviction on document edits, saves, and closes across all OS platforms (including Windows paths).
-  - In-flight promise deduplication: `pendingFullBlame` (`Map<string, Promise<Map<number, BlameInfo> | null>>`) de-duplicates concurrent full-file blame runs for the same file version without being aborted by rapid cursor navigation.
-  - Negative caching: `failedBlame` (`Set<string>`) caches un-blameable / untracked / ignored files per version to prevent spawning git subprocesses on every cursor move.
-  - Invalidate file cache on document save (`onDidSaveTextDocument`), active document modification (`onDidChangeTextDocument`), or repository-level Git state changes (`vscode.git` API).
+  - In-flight promise deduplication: `pendingFullBlame` (`Map<string, { promise, controller }>`) de-duplicates concurrent full-file blame runs for the same file version without being aborted by rapid cursor navigation.
+  - Negative caching: `failedBlame` (`Set<string>`) caches un-blameable / untracked / ignored files per version (`${file}:${version}`) or single lines (`${file}:${version}:${line}`) to prevent spawning git subprocesses on every cursor move.
+  - **Generation Counter**: `clearCache(file)` bumps a per-file generation and `clearCache()` a global one. Every blame captures the generation before its first `await` and only writes to `blameCache` / `failedBlame` if it is unchanged, so a result that finishes after a cache clear can't write stale data back.
+  - Invalidate file cache on document save (`onDidSaveTextDocument`) and active document modification (`onDidChangeTextDocument`).
+  - **External Commits (`vscode.git` API)**: `repo.state.onDidChange` fires on every status refresh (saves, window focus, any working tree change). **NEVER clear caches on every event.** `watchExternalCommits` in `extension.ts` tracks `repo.state.HEAD?.commit` per repository and calls `gitService.clearRepoCache(repo.rootUri.fsPath)` only when HEAD changes. All listeners are pushed to `context.subscriptions`.
   - Evict file cache on document close (`onDidCloseTextDocument`) to prevent memory leaks during long coding sessions.
   - Directory repository root caching: `repoRootCache` caches resolved repository roots per directory to prevent repeated `git rev-parse --show-toplevel` calls while guaranteeing 100% submodule and worktree safety.
   - Await `getRemoteBaseUrl` and `getCurrentUserEmail` resolution concurrently via `Promise.all` so `remoteCommitUrl` and `isCurrentUser` are immediately available on initial hover render and avatar lookups.
@@ -211,6 +226,8 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
   - After awaiting an async git operation, always verify that `!signal.aborted`, `vscode.window.activeTextEditor === editor`, and `editor.selection.active.line === line` before setting decorations.
   - Always guard against out-of-bounds line numbers (`blame.line < 0 || blame.line >= editor.document.lineCount`) before accessing `editor.document.lineAt`.
 - **Token Replacement Safety**: Use single-pass regular expression token replacements to prevent recursive or cascading substitutions if commit messages or author names contain format token strings (e.g. `${author}`, `${hash}`).
+- **Configuration Changes**: `toggle` / `toggleAvatar` only write the setting; `onDidChangeConfiguration` → `reloadConfig` re-renders. Configuration changes never recreate decoration types.
+- **Testing GitService**: `src/test/git-service.test.ts` creates real repos under `fs.realpathSync(os.tmpdir())` and sets `GIT_CONFIG_GLOBAL=os.devNull` / `GIT_CONFIG_NOSYSTEM=1` so the developer's git config (commit signing, ignore-revs) can't affect results. Add a test there for every change to blame execution, caching, or error handling.
 
 ### 4.3 Git Commit Policy
 
@@ -238,7 +255,7 @@ pnpm run package:vsix  # produce compact .vsix package
 - **Release Documentation**: Every release MUST be logged in [`CHANGELOG.md`](file:///Users/ridiansyah/Developer/git-glance/CHANGELOG.md) adhering to Keep a Changelog.
 - **Community Standards**: Maintain [`CONTRIBUTING.md`](file:///Users/ridiansyah/Developer/git-glance/CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](file:///Users/ridiansyah/Developer/git-glance/CODE_OF_CONDUCT.md), and [`SECURITY.md`](file:///Users/ridiansyah/Developer/git-glance/SECURITY.md) in English.
 - **Marketplace Assets**: The extension icon is located at `images/icon.png` (256x256 PNG) and must be bundled into the package via `.vscodeignore` whitelist.
-- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under ~35 KB with icon). Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
+- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under ~35 KB with icon; currently ~38 KB). Report the size whenever it grows. Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
 
 ---
 

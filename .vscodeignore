@@ -2,6 +2,7 @@
 src/**
 node_modules/**
 dist/test.js
+dist/test/**
 tsconfig.json
 **/*.map
 pnpm-lock.yaml

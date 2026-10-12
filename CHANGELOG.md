@@ -4,6 +4,33 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-12
+
+### Added
+
+- **`gitGlance.maxMessageLength`** (default `60`): long commit messages are shortened with `…` instead of running off the right edge. Set to `0` for no limit.
+- **`gitGlance.avatarSource`**: set to `"initials"` to use only local initials badges and make no network requests.
+- **`.git-blame-ignore-revs` support** (`gitGlance.useIgnoreRevsFile`, on by default): commits listed in the file at the repository root, such as bulk formatting commits, are skipped. A malformed file is ignored instead of breaking blame.
+- **`gitGlance.remote`**: choose the remote used for "Open in Browser". When empty, Git Glance uses `origin`, or the first remote if there is no `origin`.
+
+### Changed
+
+- **Cache survives window focus and saves**: Git Glance now clears a repository's blame cache only when its HEAD commit changes (commit, amend, checkout, reset). Before, every Git status refresh cleared all caches.
+- **Unsaved files are blamed once per edit**: files up to 2,500 lines are blamed whole even with unsaved changes, so moving between lines no longer starts a Git process per line.
+- **No Git process while typing**: the line you're editing shows `You, just now: Uncommitted changes` immediately.
+- **Commit Details**: the commit body is shown on one line in the Quick Pick (Quick Pick can't show line breaks), and "Copy Commit Message" copies the full message.
+- `gitGlance.delay` is limited to 0–2000 ms.
+
+### Fixed
+
+- **Wrong avatars**: author names are no longer guessed as GitHub or GitLab usernames, which showed an unrelated account's photo for names like "John" or "admin". Photos now come only from the GitHub noreply email, the GitHub commit API (github.com remotes), or Gravatar.
+- **Missing annotations in repos with long history**: if blaming a whole file takes longer than 5 seconds, Git Glance falls back to single-line blame instead of showing nothing until the file is saved.
+- **Annotations disappearing in unsaved files**: placing the cursor on the empty last line of a large unsaved file no longer hides blame for every other line.
+- **Hover content**: HTML in commit messages and author names is shown as text. Before, a message containing `<img src=...>` could load a remote image whenever the hover opened.
+- **Stale blame after a commit**: a blame that finishes after the cache was cleared is no longer stored.
+- **Open Commit on Remote** works from a hover link even when the current line has no blame yet.
+- **Fewer repeated avatar lookups**: authors without a photo are not looked up again for 7 days. Offline or proxy failures are retried next session.
+
 ## [1.1.4] - 2026-10-08
 
 ### Added

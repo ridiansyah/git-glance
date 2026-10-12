@@ -2,7 +2,7 @@
   "name": "git-glance",
   "displayName": "Git Glance",
   "description": "A modern, ultra-lightweight, and delightful inline Git blame extension for Visual Studio Code",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "publisher": "ridiansyah",
   "author": {
     "name": "Wahyu Ridiansyah",
@@ -157,6 +157,35 @@
           "default": true,
           "description": "Show profile picture / avatar next to inline annotation. When disabled, only text is shown."
         },
+        "gitGlance.avatarSource": {
+          "type": "string",
+          "enum": [
+            "remote",
+            "initials"
+          ],
+          "enumDescriptions": [
+            "Download author photos from GitHub and Gravatar (sends the email hash or commit SHA to those services). Initials are shown until a photo is found.",
+            "Only show locally generated initials. Nothing is sent over the network."
+          ],
+          "default": "remote",
+          "description": "Where avatar images come from."
+        },
+        "gitGlance.maxMessageLength": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "Shorten the commit message in the inline annotation to this many characters, ending with '…'. Set to 0 for no limit."
+        },
+        "gitGlance.remote": {
+          "type": "string",
+          "default": "",
+          "description": "Name of the git remote used for 'Open in Browser' links. Leave empty to use 'origin', or the first remote when there is no 'origin'."
+        },
+        "gitGlance.useIgnoreRevsFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Skip commits listed in the repository's .git-blame-ignore-revs file (e.g. bulk formatting commits) and show the commit before them."
+        },
         "gitGlance.prefix": {
           "type": "string",
           "default": "👀 ",
@@ -190,6 +219,8 @@
         "gitGlance.delay": {
           "type": "number",
           "default": 100,
+          "minimum": 0,
+          "maximum": 2000,
           "description": "Debounce delay in milliseconds before fetching git blame after moving cursor."
         },
         "gitGlance.showHover": {
@@ -202,11 +233,11 @@
   },
   "scripts": {
     "vscode:prepublish": "pnpm run package",
-    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
-    "watch": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
-    "package": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify",
+    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
+    "watch": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18 --watch",
+    "package": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18 --minify",
     "package:vsix": "vsce package --no-git-tag-version",
-    "test": "esbuild ./src/test/unit.test.ts --bundle --outfile=dist/test.js --platform=node && node --test dist/test.js",
+    "test": "esbuild ./src/test/unit.test.ts ./src/test/git-service.test.ts --bundle --outdir=dist/test --platform=node --target=node18 && node --test dist/test/unit.test.js dist/test/git-service.test.js",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {

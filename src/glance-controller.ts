@@ -1,8 +1,14 @@
 import * as vscode from "vscode";
-import { GitService } from "./git";
+import { GitService, createUncommittedBlame } from "./git";
 import { DecorationManager } from "./decoration";
 import { AvatarService } from "./utils/avatar";
-import { BlameInfo, GitGlanceConfig, GlancePreset } from "./types";
+import {
+  AvatarSource,
+  BlameInfo,
+  DateStyle,
+  GitGlanceConfig,
+  GlancePreset,
+} from "./types";
 
 export class GlanceController {
   private config: GitGlanceConfig;
@@ -19,6 +25,10 @@ export class GlanceController {
     private avatarService?: AvatarService,
   ) {
     this.config = this.loadConfig();
+    this.gitService.setOptions({
+      remoteName: this.config.remote,
+      useIgnoreRevsFile: this.config.useIgnoreRevsFile,
+    });
 
     if (this.avatarService) {
       this.avatarDisposable = this.avatarService.onAvatarReady((key) => {
@@ -46,53 +56,53 @@ export class GlanceController {
 
   public reloadConfig() {
     this.config = this.loadConfig();
-    this.decorationManager.recreateDecorationType();
+    this.gitService.setOptions({
+      remoteName: this.config.remote,
+      useIgnoreRevsFile: this.config.useIgnoreRevsFile,
+    });
     this.updateBlame(vscode.window.activeTextEditor, true);
   }
 
-  public async toggle() {
-    const wsConfig = vscode.workspace.getConfiguration("gitGlance");
-    const inspected = wsConfig.inspect<boolean>("enabled");
-    const target =
-      inspected?.workspaceFolderValue !== undefined
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : inspected?.workspaceValue !== undefined
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global;
-
-    const newEnabled = !this.config.enabled;
-    await wsConfig.update("enabled", newEnabled, target);
-    this.config.enabled = newEnabled;
-
-    if (!newEnabled) {
-      if (vscode.window.activeTextEditor) {
-        this.decorationManager.clear(vscode.window.activeTextEditor);
-      }
-      vscode.window.showInformationMessage("Git Glance: Disabled");
-    } else {
-      vscode.window.showInformationMessage("Git Glance: Enabled");
-      this.updateBlame(vscode.window.activeTextEditor, true);
+  /**
+   * Re-renders the active editor after the cache of the given repository (or all) was cleared.
+   */
+  public refreshActiveEditor() {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+      this.updateBlame(editor, true);
     }
   }
 
+  // Both toggles only write the setting; onDidChangeConfiguration → reloadConfig re-renders.
+  public async toggle() {
+    const newEnabled = !this.config.enabled;
+    await this.updateSetting("enabled", newEnabled);
+    vscode.window.showInformationMessage(
+      `Git Glance: ${newEnabled ? "Enabled" : "Disabled"}`,
+    );
+  }
+
   public async toggleAvatar() {
+    const newShowAvatar = !this.config.showAvatar;
+    await this.updateSetting("showAvatar", newShowAvatar);
+    vscode.window.showInformationMessage(
+      `Git Glance: Avatar ${newShowAvatar ? "Enabled" : "Disabled"}`,
+    );
+  }
+
+  /**
+   * Writes the setting at the most specific scope that already defines it.
+   */
+  private async updateSetting(key: "enabled" | "showAvatar", value: boolean) {
     const wsConfig = vscode.workspace.getConfiguration("gitGlance");
-    const inspected = wsConfig.inspect<boolean>("showAvatar");
+    const inspected = wsConfig.inspect<boolean>(key);
     const target =
       inspected?.workspaceFolderValue !== undefined
         ? vscode.ConfigurationTarget.WorkspaceFolder
         : inspected?.workspaceValue !== undefined
           ? vscode.ConfigurationTarget.Workspace
           : vscode.ConfigurationTarget.Global;
-
-    const newShowAvatar = !this.config.showAvatar;
-    await wsConfig.update("showAvatar", newShowAvatar, target);
-    this.config.showAvatar = newShowAvatar;
-
-    vscode.window.showInformationMessage(
-      `Git Glance: Avatar ${newShowAvatar ? "Enabled" : "Disabled"}`,
-    );
-    this.updateBlame(vscode.window.activeTextEditor, true);
+    await wsConfig.update(key, value, target);
   }
 
   public onSelectionChange(event: vscode.TextEditorSelectionChangeEvent) {
@@ -181,23 +191,32 @@ export class GlanceController {
       );
     });
 
-    if (affectsActiveLine) {
-      this.currentBlame = null;
-      this.gitService.clearCache(event.document.fileName);
-
-      if (this.activeAbortController) {
-        this.activeAbortController.abort();
-        this.activeAbortController = undefined;
-      }
-
-      if (this.debounceTimer) {
-        clearTimeout(this.debounceTimer);
-        this.debounceTimer = undefined;
-      }
-      this.debounceTimer = setTimeout(() => {
-        this.updateBlame(editor, true);
-      }, Math.max(this.config.delay, 300));
+    if (!affectsActiveLine) {
+      return;
     }
+
+    this.gitService.clearCache(event.document.fileName);
+    this.cancelPending();
+
+    // A line being typed on is uncommitted, so render that without spawning git.
+    // Only when the line already had a blame: that proves the file is tracked.
+    // An edit that makes the buffer clean again (undo to saved) still asks git.
+    const previous = this.currentBlame;
+    if (
+      previous !== null &&
+      this.currentLine === activeLine &&
+      event.document.isDirty
+    ) {
+      const blame = createUncommittedBlame(activeLine, previous.repoRoot);
+      this.currentBlame = blame;
+      this.decorationManager.applyDecoration(editor, blame, this.config, null);
+      return;
+    }
+
+    this.currentBlame = null;
+    this.debounceTimer = setTimeout(() => {
+      this.updateBlame(editor, true);
+    }, Math.max(this.config.delay, 300));
   }
 
   public async updateBlame(
@@ -234,12 +253,14 @@ export class GlanceController {
     this.activeAbortController = abortController;
 
     const blame = await this.gitService.getBlameForLine(
-      document.fileName,
-      line,
-      document.version,
-      document.isDirty ? document.getText() : undefined,
-      document.isDirty,
-      document.lineCount,
+      {
+        filePath: document.fileName,
+        line,
+        documentVersion: document.version,
+        lineCount: document.lineCount,
+        isDirty: document.isDirty,
+        getText: () => document.getText(),
+      },
       abortController.signal,
     );
 
@@ -271,6 +292,7 @@ export class GlanceController {
         blame.author,
         blame.authorEmail,
         blame.isUncommitted,
+        this.config.avatarSource === "remote",
         blame.remoteCommitUrl,
       );
       if (avatarPath) {
@@ -292,15 +314,19 @@ export class GlanceController {
     this.decorationManager.clear(editor);
   }
 
-  public dispose() {
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = undefined;
-    }
+  private cancelPending() {
     if (this.activeAbortController) {
       this.activeAbortController.abort();
       this.activeAbortController = undefined;
     }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = undefined;
+    }
+  }
+
+  public dispose() {
+    this.cancelPending();
     if (this.avatarDisposable) {
       this.avatarDisposable.dispose();
     }
@@ -312,22 +338,23 @@ export class GlanceController {
       enabled: wsConfig.get<boolean>("enabled", true),
       preset: wsConfig.get<GlancePreset>("preset", "default"),
       showAvatar: wsConfig.get<boolean>("showAvatar", true),
+      avatarSource: wsConfig.get<AvatarSource>("avatarSource", "remote"),
       prefix: wsConfig.get<string>("prefix", "👀 "),
       format: wsConfig.get<string>("format", "${author}, ${time}: ${message}"),
       uncommittedFormat: wsConfig.get<string>(
         "uncommittedFormat",
         "${author}, ${time}: ${message}",
       ),
-      dateStyle: wsConfig.get<"relative" | "absolute" | "short">(
-        "dateStyle",
-        "relative",
-      ),
+      dateStyle: wsConfig.get<DateStyle>("dateStyle", "relative"),
       hoverDateFormat: wsConfig.get<string>(
         "hoverDateFormat",
         "DD/MM/YYYY HH:mm",
       ),
       delay: wsConfig.get<number>("delay", 100),
       showHover: wsConfig.get<boolean>("showHover", true),
+      maxMessageLength: wsConfig.get<number>("maxMessageLength", 60),
+      remote: wsConfig.get<string>("remote", ""),
+      useIgnoreRevsFile: wsConfig.get<boolean>("useIgnoreRevsFile", true),
     };
   }
 }

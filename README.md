@@ -8,8 +8,8 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://badgen.net/vs-marketplace/v/ridiansyah.git-glance" alt="VS Code Marketplace"></a>
   <a href="https://github.com/ridiansyah/git-glance/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/vscode-%5E1.85.0-blue.svg" alt="VS Code Version">
-  <img src="https://img.shields.io/badge/bundle%20size-%7E25%20KB-brightgreen.svg" alt="Bundle Size">
-  <img src="https://img.shields.io/badge/package%20size-%3C%2032%20KB-brightgreen.svg" alt="Package Size">
+  <img src="https://img.shields.io/badge/bundle%20size-%7E34%20KB-brightgreen.svg" alt="Bundle Size">
+  <img src="https://img.shields.io/badge/package%20size-%3C%2040%20KB-brightgreen.svg" alt="Package Size">
   <a href="https://github.com/ridiansyah/git-glance/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -31,23 +31,24 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 | Feature / Metric           | ⚡ Git Glance                                                                                            | Heavy Git Extensions (e.g. GitLens)        |
 | :------------------------- | :------------------------------------------------------------------------------------------------------ | :----------------------------------------- |
-| **Package Size (VSIX)**    | **~31 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
-| **Minified Bundle**        | **~25 KB**                                                                                              | **~5 - 10 MB**                             |
+| **Package Size (VSIX)**    | **~38 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
+| **Minified Bundle**        | **~34 KB**                                                                                              | **~5 - 10 MB**                             |
 | **Runtime Dependencies**   | **0** (Zero external dependencies)                                                                      | Dozens of npm packages                     |
 | **Startup Impact**         | **0 ms** (`onStartupFinished`)                                                                          | Often adds noticeable startup delay        |
-| **Blame Execution**        | **Hybrid blame** (0ms instant in-memory cache for clean files + targeted 1-line for dirty/large files)    | Full-file / repository indexing            |
+| **Blame Execution**        | **Hybrid blame** (0ms in-memory cache per file version + targeted 1-line blame for large files)          | Full-file / repository indexing            |
 | **Memory Footprint (RAM)** | **< 15 MB** (bounded LRU cache)                                                                         | Up to 100+ MB                              |
-| **Telemetry & Accounts**   | **100% Private, zero accounts/sign-in**                                                                 | Requires accounts, cloud sync, telemetry   |
+| **Telemetry & Accounts**   | **No telemetry, no accounts/sign-in** (avatars can be local-only, see below)                            | Requires accounts, cloud sync, telemetry   |
 | **Focus & Feel**           | **Distraction-free inline annotations**                                                                 | Heavy sidebars, revision trees, git graphs |
 
 ---
 
 ## ✨ Features
 
-- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~25 KB file with zero runtime dependencies.
-- **⚡ Instant 0ms Lookups & Zero-Debounce**: Clean saved files are blamed once and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
+- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~34 KB file with zero runtime dependencies.
+- **⚡ Instant 0ms Lookups & Zero-Debounce**: Files are blamed once per edit and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
 - **🛡️ Process Cancellation & Zero DOM Churn**: Automatically aborts obsolete in-flight Git processes on fast cursor navigation and reuses persistent decoration types to eliminate Monaco stylesheet churn.
-- **🔋 Battery-Friendly Typing**: While you type on the active line, re-blame waits for a longer pause (≥ 300 ms) and cancels stale Git processes, so subprocesses don't pile up.
+- **🔋 Battery-Friendly Typing**: The line you are typing on shows `You, just now: Uncommitted changes` without running Git at all.
+- **🧹 Skips Formatting Commits**: Honors `.git-blame-ignore-revs`, so bulk reformatting commits don't hide the real author.
 - **👀 Subdued Inline Annotation**: Appears gracefully at the end of the active cursor line with subtle, theme-adaptive coloring.
 - **✨ Uncommitted Line Detection**: Detects uncommitted and newly added lines seamlessly (`You, 3 hours ago: Uncommitted changes`).
 - **💬 Rich Interactive Hover Card**: Hovering over the annotation displays an elegant card with:
@@ -127,6 +128,10 @@ Open VS Code **Settings** (`Cmd + ,` or `Ctrl + ,`) and search for `Git Glance`:
 | `gitGlance.enabled`           | `true`                             | Enable or disable inline annotations globally.                                                                                                                             |
 | `gitGlance.preset`            | `"default"`                        | Choose a preset style (`default`, `minimalist`, `playful`, `terminal`, `github`, `breadcrumb`, `bento`, `comment`), or select `"custom"` to design your own format freely. |
 | `gitGlance.showAvatar`        | `true`                             | Display profile picture / avatar next to inline annotation.                                                                                                                |
+| `gitGlance.avatarSource`      | `"remote"`                         | `"remote"` downloads photos (see [Privacy](#-privacy)); `"initials"` uses local initials badges only.                                                                       |
+| `gitGlance.maxMessageLength`  | `60`                               | Shorten the inline commit message to this many characters (`0` = no limit).                                                                                               |
+| `gitGlance.remote`            | `""`                               | Remote used for "Open in Browser" links. Empty = `origin`, or the first remote if there is no `origin`.                                                                    |
+| `gitGlance.useIgnoreRevsFile` | `true`                             | Skip commits listed in the repository's `.git-blame-ignore-revs` file.                                                                                                      |
 | `gitGlance.format`            | `"${author}, ${time}: ${message}"` | Custom template for inline annotation (used when preset is `"custom"`).                                                                                                    |
 | `gitGlance.uncommittedFormat` | `"${author}, ${time}: ${message}"` | Custom template for uncommitted lines (used when preset is `"custom"`).                                                                                                    |
 | `gitGlance.dateStyle`         | `"relative"`                       | Style for dates: `"relative"` (e.g. `3 days ago`), `"short"`, or `"absolute"`.                                                                                             |
@@ -171,6 +176,20 @@ Customize the exact timestamp displayed in the hover card tooltip using these to
 | `MMM` / `MMMM` | Month name (short / full)          | `Sep`, `September`        |
 | `ddd` / `dddd` | Weekday name (short / full)        | `Fri`, `Friday`           |
 | `[...]`        | Escaped literal text               | `[at] HH:mm` → `at 14:10` |
+
+---
+
+## 🔒 Privacy
+
+Git Glance has no telemetry and needs no account. Blame data never leaves your machine.
+
+With `gitGlance.avatarSource` set to `"remote"` (the default), author photos are looked up in the background:
+
+- **GitHub noreply emails** (`123+user@users.noreply.github.com`): the photo is downloaded from `github.com/<user>.png`.
+- **Repositories hosted on github.com**: the GitHub API is asked which account made the commit (repository name and commit SHA are sent).
+- **Gravatar**: the MD5 hash of the author's email is sent.
+
+Set `gitGlance.avatarSource` to `"initials"` to make no network requests, or turn avatars off with `gitGlance.showAvatar`.
 
 ---
 

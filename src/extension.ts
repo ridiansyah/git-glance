@@ -67,48 +67,73 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
-  // Hook into VS Code built-in Git extension if present to detect external commits
-  try {
-    const gitExtension = vscode.extensions.getExtension("vscode.git");
-    if (gitExtension) {
-      const activateGit = async () => {
-        try {
-          const gitApi = gitExtension.exports?.getAPI?.(2);
-          if (gitApi) {
-            gitApi.repositories?.forEach((repo: any) => {
-              repo.state?.onDidChange?.(() => {
-                gitService?.clearCache();
-                if (vscode.window.activeTextEditor) {
-                  controller?.updateBlame(vscode.window.activeTextEditor, true);
-                }
-              });
-            });
-            gitApi.onDidOpenRepository?.((repo: any) => {
-              repo.state?.onDidChange?.(() => {
-                gitService?.clearCache();
-                if (vscode.window.activeTextEditor) {
-                  controller?.updateBlame(vscode.window.activeTextEditor, true);
-                }
-              });
-            });
-          }
-        } catch {
-          // Ignore if git extension API is unavailable
-        }
-      };
-      if (gitExtension.isActive) {
-        activateGit();
-      } else {
-        gitExtension.activate().then(activateGit, () => {});
-      }
-    }
-  } catch {
-    // Ignore error hook
-  }
+  watchExternalCommits(context);
 
   // Run immediately on active editor if any
   if (vscode.window.activeTextEditor) {
     controller.onActiveEditorChange(vscode.window.activeTextEditor);
+  }
+}
+
+// Subset of the vscode.git extension API (v2) used here.
+interface GitApiRepository {
+  rootUri: vscode.Uri;
+  state: {
+    HEAD?: { commit?: string };
+    onDidChange: vscode.Event<void>;
+  };
+}
+
+interface GitApi {
+  repositories: GitApiRepository[];
+  onDidOpenRepository: vscode.Event<GitApiRepository>;
+}
+
+/**
+ * Clears a repository's blame cache when its HEAD commit changes (commit, amend,
+ * checkout, reset from the terminal or the SCM view).
+ *
+ * `repo.state.onDidChange` also fires on every status refresh (saves, window focus,
+ * any working tree change), so reacting to every event would empty the cache constantly.
+ */
+function watchExternalCommits(context: vscode.ExtensionContext) {
+  const gitExtension = vscode.extensions.getExtension("vscode.git");
+  if (!gitExtension) {
+    return;
+  }
+
+  const watchRepository = (repo: GitApiRepository) => {
+    let head = repo.state.HEAD?.commit;
+    context.subscriptions.push(
+      repo.state.onDidChange(() => {
+        const nextHead = repo.state.HEAD?.commit;
+        if (nextHead === head) {
+          return;
+        }
+        head = nextHead;
+        gitService?.clearRepoCache(repo.rootUri.fsPath);
+        controller?.refreshActiveEditor();
+      }),
+    );
+  };
+
+  const attach = () => {
+    try {
+      const gitApi: GitApi | undefined = gitExtension.exports?.getAPI?.(2);
+      if (!gitApi) {
+        return;
+      }
+      gitApi.repositories.forEach(watchRepository);
+      context.subscriptions.push(gitApi.onDidOpenRepository(watchRepository));
+    } catch {
+      // Git extension API unavailable (e.g. git.enabled = false)
+    }
+  };
+
+  if (gitExtension.isActive) {
+    attach();
+  } else {
+    gitExtension.activate().then(attach, () => {});
   }
 }
 

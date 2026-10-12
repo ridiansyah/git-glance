@@ -16,6 +16,9 @@ const AVATAR_COLORS = [
   "#a855f7", // Purple
 ];
 
+const FETCH_TIMEOUT_MS = 2500;
+const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export type AvatarReadyListener = (key: string, avatarPath: string) => void;
 
 export class AvatarService {
@@ -85,16 +88,22 @@ export class AvatarService {
       return "__you__";
     }
     const cleanEmail = email.toLowerCase().trim();
-    return cleanEmail || author.toLowerCase().trim() || "unknown";
+    if (cleanEmail.length > 0) {
+      return cleanEmail;
+    }
+    const cleanAuthor = author.toLowerCase().trim();
+    return cleanAuthor.length > 0 ? cleanAuthor : "unknown";
   }
 
   /**
    * Retrieves or generates a local avatar file path for the given author.
+   * With `allowRemote` false, only the local initials badge is used and nothing is fetched.
    */
   public getAvatarPath(
     author: string,
     email: string,
     isUncommitted: boolean,
+    allowRemote: boolean,
     remoteCommitUrl?: string,
   ): string | null {
     if (isUncommitted) {
@@ -102,8 +111,9 @@ export class AvatarService {
     }
 
     const key = this.getAvatarKey(author, email, isUncommitted);
-    if (this.memoryCache.has(key)) {
-      return this.memoryCache.get(key)!;
+    const memoryKey = allowRemote ? key : `initials:${key}`;
+    if (this.memoryCache.has(memoryKey)) {
+      return this.memoryCache.get(memoryKey)!;
     }
 
     const hash = crypto.createHash("md5").update(key).digest("hex");
@@ -112,10 +122,11 @@ export class AvatarService {
       this.avatarDir,
       `${hash}_initials_v4.svg`,
     );
+    const notFoundPath = path.join(this.avatarDir, `${hash}_none_v4`);
 
     // 1. If photo SVG was already downloaded and wrapped, use it!
-    if (fs.existsSync(photoSvgPath)) {
-      this.memoryCache.set(key, photoSvgPath);
+    if (allowRemote && fs.existsSync(photoSvgPath)) {
+      this.memoryCache.set(memoryKey, photoSvgPath);
       return photoSvgPath;
     }
 
@@ -129,15 +140,27 @@ export class AvatarService {
       }
     }
 
-    this.memoryCache.set(key, initialsSvgPath);
+    this.memoryCache.set(memoryKey, initialsSvgPath);
 
-    // 3. Asynchronously attempt to fetch photo in background if not already fetching
-    if (!this.fetchingSet.has(key)) {
+    // 3. Fetch the photo in the background, unless a recent lookup found none
+    if (
+      allowRemote &&
+      !this.fetchingSet.has(key) &&
+      !this.isRecentlyNotFound(notFoundPath)
+    ) {
       this.fetchingSet.add(key);
-      this.fetchRemoteAvatar(author, email, photoSvgPath, key, remoteCommitUrl);
+      this.fetchRemoteAvatar(email, photoSvgPath, notFoundPath, key, remoteCommitUrl);
     }
 
     return initialsSvgPath;
+  }
+
+  private isRecentlyNotFound(notFoundPath: string): boolean {
+    try {
+      return Date.now() - fs.statSync(notFoundPath).mtimeMs < NOT_FOUND_TTL_MS;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -224,92 +247,141 @@ export class AvatarService {
   }
 
   /**
-   * Asynchronously attempts to fetch author photo from GitHub, Gravatar, or GitLab.
+   * Fetches the author photo in the background. Only sources tied to the commit
+   * email are used, so a photo always belongs to the commit's author:
+   *   1. GitHub noreply email → that GitHub user
+   *   2. GitHub commit API (github.com remotes) → the account GitHub linked to the email
+   *   3. Gravatar for the email
+   * When every source answers "no photo", that's remembered on disk for a week.
    */
   private async fetchRemoteAvatar(
-    author: string,
     email: string,
     targetSvgPath: string,
+    notFoundPath: string,
     key: string,
     remoteCommitUrl?: string,
   ) {
-    try {
-      const urlsToTry: string[] = [];
+    const cleanEmail = email.toLowerCase().trim();
+    let hadNetworkError = false;
 
-      const cleanEmail = email.toLowerCase().trim();
-      const cleanAuthor = author.trim();
+    const candidates: Array<() => Promise<string | null>> = [];
 
-      // 1. Check for GitHub noreply email (e.g. 12345+username@users.noreply.github.com)
-      const ghNoreplyMatch = cleanEmail.match(
-        /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/i,
+    const noreplyMatch = cleanEmail.match(
+      /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/,
+    );
+    if (noreplyMatch !== null) {
+      const username = noreplyMatch[1];
+      candidates.push(async () =>
+        `https://github.com/${encodeURIComponent(username)}.png?size=64`,
       );
-      if (ghNoreplyMatch && ghNoreplyMatch[1]) {
-        urlsToTry.push(
-          `https://github.com/${encodeURIComponent(ghNoreplyMatch[1])}.png?size=64`,
+    }
+
+    const githubCommit =
+      remoteCommitUrl === undefined
+        ? null
+        : remoteCommitUrl.match(
+            /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]+)$/,
+          );
+    if (noreplyMatch === null && githubCommit !== null) {
+      const [, owner, repo, sha] = githubCommit;
+      candidates.push(async () => {
+        const response = await this.fetchWithTimeout(
+          `https://api.github.com/repos/${owner}/${repo}/commits/${sha}`,
+          { accept: "application/vnd.github+json" },
         );
-      }
-
-      // 2. Gravatar check if email is available and not a noreply address
-      if (cleanEmail && !cleanEmail.includes("noreply")) {
-        const hash = crypto.createHash("md5").update(cleanEmail).digest("hex");
-        urlsToTry.push(`https://www.gravatar.com/avatar/${hash}?s=64&d=404`);
-      }
-
-      // 3. GitHub username fallback (when author is a valid handle without spaces)
-      const isValidHandle =
-        /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/.test(cleanAuthor);
-      if (isValidHandle) {
-        urlsToTry.push(
-          `https://github.com/${encodeURIComponent(cleanAuthor)}.png?size=64`,
-        );
-      }
-
-      // 4. GitLab username fallback if remote URL is gitlab.com
-      if (
-        remoteCommitUrl &&
-        remoteCommitUrl.includes("gitlab.com") &&
-        isValidHandle
-      ) {
-        urlsToTry.push(
-          `https://gitlab.com/${encodeURIComponent(cleanAuthor)}.png`,
-        );
-      }
-
-      for (const url of urlsToTry) {
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 2500);
-
-          try {
-            const response = await fetch(url, {
-              signal: controller.signal,
-              redirect: "follow",
-            });
-
-            if (response.ok) {
-              const contentType =
-                response.headers.get("content-type") || "image/png";
-              if (contentType.startsWith("image/")) {
-                const arrayBuffer = await response.arrayBuffer();
-                const base64Data = Buffer.from(arrayBuffer).toString("base64");
-                const wrappedSvg = this.wrapImageInSvg(base64Data, contentType);
-                fs.writeFileSync(targetSvgPath, wrappedSvg, "utf8");
-                this.memoryCache.set(key, targetSvgPath);
-                this.notifyAvatarReady(key, targetSvgPath);
-                return;
-              }
-            }
-          } catch {
-            // Continue to next candidate URL
-          } finally {
-            clearTimeout(timeout);
-          }
-        } catch {
-          // Continue to next candidate URL
+        if (response === null) {
+          hadNetworkError = true;
+          return null;
         }
+        if (!response.ok) {
+          // 403 = rate limited: not a definitive "no photo"
+          if (response.status === 403 || response.status === 429) {
+            hadNetworkError = true;
+          }
+          return null;
+        }
+        const body = (await response.json()) as {
+          author?: { avatar_url?: unknown } | null;
+        };
+        const avatarUrl = body.author?.avatar_url;
+        if (typeof avatarUrl !== "string") {
+          return null;
+        }
+        const url = new URL(avatarUrl);
+        url.searchParams.set("s", "64");
+        return url.toString();
+      });
+    }
+
+    if (cleanEmail.length > 0 && !cleanEmail.includes("noreply")) {
+      const hash = crypto.createHash("md5").update(cleanEmail).digest("hex");
+      candidates.push(async () =>
+        `https://www.gravatar.com/avatar/${hash}?s=64&d=404`,
+      );
+    }
+
+    for (const resolveUrl of candidates) {
+      try {
+        const url = await resolveUrl();
+        if (url === null) {
+          continue;
+        }
+        const response = await this.fetchWithTimeout(url);
+        if (response === null) {
+          hadNetworkError = true;
+          continue;
+        }
+        if (!response.ok) {
+          continue;
+        }
+        const header = response.headers.get("content-type");
+        const contentType = header === null ? "image/png" : header;
+        if (!contentType.startsWith("image/")) {
+          continue;
+        }
+        const base64Data = Buffer.from(await response.arrayBuffer()).toString(
+          "base64",
+        );
+        fs.writeFileSync(
+          targetSvgPath,
+          this.wrapImageInSvg(base64Data, contentType),
+          "utf8",
+        );
+        this.memoryCache.set(key, targetSvgPath);
+        this.notifyAvatarReady(key, targetSvgPath);
+        return;
+      } catch {
+        hadNetworkError = true;
       }
+    }
+
+    // Offline or blocked by a proxy: try again next session instead of for a week.
+    if (!hadNetworkError) {
+      try {
+        fs.writeFileSync(notFoundPath, "", "utf8");
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /** Resolves to null on network errors and timeouts. */
+  private async fetchWithTimeout(
+    url: string,
+    headers?: Record<string, string>,
+  ): Promise<Response | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      return await fetch(url, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers,
+      });
     } catch {
-      // Fail gracefully without crashing
+      return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

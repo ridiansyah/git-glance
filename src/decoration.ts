@@ -35,12 +35,6 @@ export class DecorationManager {
     });
   }
 
-  public recreateDecorationType() {
-    this.dispose();
-    this.avatarDecorationType = this.createAvatarDecorationType();
-    this.textDecorationType = this.createTextDecorationType();
-  }
-
   public dispose() {
     if (this.avatarDecorationType) {
       this.avatarDecorationType.dispose();
@@ -157,7 +151,9 @@ export class DecorationManager {
         "gitGlance.showCommitDetails",
       ],
     };
-    md.supportHtml = true;
+    // No HTML: author names and commit messages come from other people, and
+    // `<img src=...>` in a message would load a remote image on hover.
+    md.supportHtml = false;
 
     const timeAgo = formatRelativeTime(blame.authorDate);
     const exactDate = formatCustomDate(blame.authorDate, hoverDateFormat);
@@ -169,7 +165,7 @@ export class DecorationManager {
 
     md.appendMarkdown(`### Git Glance\n\n`);
     md.appendMarkdown(
-      `$(account) **Author:** ${authorDisplay} ${blame.authorEmail ? `*<${escapeMarkdown(blame.authorEmail)}>*` : ""}\n\n`,
+      `$(account) **Author:** ${authorDisplay} ${blame.authorEmail ? `*\\<${escapeMarkdown(blame.authorEmail)}\\>*` : ""}\n\n`,
     );
     md.appendMarkdown(`$(calendar) **Date:** ${timeAgo} (${exactDate})\n\n`);
     md.appendMarkdown(`$(git-commit) **Commit:** \`${blame.shortSha}\`\n\n`);
@@ -189,7 +185,7 @@ export class DecorationManager {
       );
     }
 
-    md.appendMarkdown(`---\n\n${actions.join("  &nbsp;•&nbsp;  ")}`);
+    md.appendMarkdown(`---\n\n${actions.join("  •  ")}`);
 
     return md;
   }
