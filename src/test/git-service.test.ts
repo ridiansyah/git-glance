@@ -9,7 +9,7 @@ import { BlameRequest } from "../types";
 
 // Keep the developer's global git config (signing, ignore-revs, ...) out of these tests.
 // An empty file, not os.devNull: on Windows that is `\\.\nul`, which git can't open.
-const emptyGlobalConfig = path.join(fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "git-glance-cfg-")), "gitconfig");
+const emptyGlobalConfig = path.join(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "git-glance-cfg-")), "gitconfig");
 fs.writeFileSync(emptyGlobalConfig, "");
 process.env.GIT_CONFIG_GLOBAL = emptyGlobalConfig;
 process.env.GIT_CONFIG_NOSYSTEM = "1";
@@ -34,7 +34,7 @@ function git(cwd: string, args: string[], who = ME): string {
 /** Repo with `a.txt` = "one\ntwo\nthree\n" committed as "init" by ME. */
 function createRepo(): { root: string; file: string; cleanup: () => void } {
   // realpath: macOS tmpdir is a symlink, and git reports the resolved root.
-  const root = fs.realpathSync(
+  const root = fs.realpathSync.native(
     fs.mkdtempSync(path.join(os.tmpdir(), "git-glance-test-")),
   );
   git(root, ["init", "-q"]);
