@@ -25,7 +25,12 @@ export function registerCommands(
   context: vscode.ExtensionContext,
   controller: GlanceController,
   gitService: GitService,
+  showLog: () => void,
 ) {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gitGlance.showLog", showLog),
+  );
+
   // Toggle command
   context.subscriptions.push(
     vscode.commands.registerCommand("gitGlance.toggle", () => {
@@ -231,7 +236,7 @@ export function registerCommands(
         const remoteUrl = await gitService.getRemoteCommitUrl(repoRoot, sha);
         if (!remoteUrl) {
           vscode.window.showWarningMessage(
-            "Git Glance: Remote repository URL not found or unsupported.",
+            "Git Glance: Remote repository URL not found or unsupported. You can configure 'gitGlance.commitUrlTemplate' for custom Git servers.",
           );
           return;
         }

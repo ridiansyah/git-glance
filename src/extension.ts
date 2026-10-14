@@ -9,9 +9,41 @@ let controller: GlanceController | undefined;
 let decorationManager: DecorationManager | undefined;
 let gitService: GitService | undefined;
 let avatarService: AvatarService | undefined;
+let logChannel: vscode.LogOutputChannel | undefined;
+
+function getLogChannel(): vscode.LogOutputChannel {
+  if (logChannel === undefined) {
+    logChannel = vscode.window.createOutputChannel("Git Glance", { log: true });
+  }
+  return logChannel;
+}
 
 export function activate(context: vscode.ExtensionContext) {
-  gitService = new GitService();
+  gitService = new GitService(
+    {},
+    {
+      info: (message) => getLogChannel().info(message),
+      warn: (message) => getLogChannel().warn(message),
+    },
+  );
+  gitService.onGitMissing = () => {
+    vscode.window
+      .showWarningMessage(
+        "Git Glance: git was not found. Install git or set 'git.path' in settings.",
+        "Open Settings",
+        "Show Log",
+      )
+      .then((choice) => {
+        if (choice === "Open Settings") {
+          vscode.commands.executeCommand(
+            "workbench.action.openSettings",
+            "git.path",
+          );
+        } else if (choice === "Show Log") {
+          getLogChannel().show(true);
+        }
+      });
+  };
   decorationManager = new DecorationManager();
   avatarService = new AvatarService(context.globalStorageUri?.fsPath);
   controller = new GlanceController(
@@ -21,7 +53,9 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Register commands
-  registerCommands(context, controller, gitService);
+  registerCommands(context, controller, gitService, () =>
+    getLogChannel().show(true),
+  );
 
   // Register event listeners
   context.subscriptions.push(
@@ -63,6 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
         decorationManager?.dispose();
         avatarService?.dispose();
         gitService?.dispose();
+        logChannel?.dispose();
       },
     },
   );
@@ -75,7 +110,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 }
 
-// Subset of the vscode.git extension API (v2) used here.
+// Subset of the vscode.git extension API (v1) used here.
 interface GitApiRepository {
   rootUri: vscode.Uri;
   state: {
@@ -87,6 +122,8 @@ interface GitApiRepository {
 interface GitApi {
   repositories: GitApiRepository[];
   onDidOpenRepository: vscode.Event<GitApiRepository>;
+  /** The git executable VS Code resolved (`git.path`, registry, known install folders). */
+  git?: { path?: string };
 }
 
 /**
@@ -119,12 +156,26 @@ function watchExternalCommits(context: vscode.ExtensionContext) {
 
   const attach = () => {
     try {
-      const gitApi: GitApi | undefined = gitExtension.exports?.getAPI?.(2);
+      const gitApi: GitApi | undefined = gitExtension.exports?.getAPI?.(1);
       if (!gitApi) {
         return;
       }
+      // A bare `git` only works when it is on PATH; VS Code's own lookup also finds
+      // installs that aren't (common on Windows).
+      const gitPath = gitApi.git?.path;
+      if (typeof gitPath === "string" && gitPath.length > 0) {
+        gitService?.setGitPath(gitPath);
+        controller?.refreshActiveEditor();
+      }
       gitApi.repositories.forEach(watchRepository);
-      context.subscriptions.push(gitApi.onDidOpenRepository(watchRepository));
+      context.subscriptions.push(
+        gitApi.onDidOpenRepository((repo) => {
+          watchRepository(repo);
+          // A folder that just became a repository was cached as "not a repository".
+          gitService?.resetRepoDiscovery();
+          controller?.refreshActiveEditor();
+        }),
+      );
     } catch {
       // Git extension API unavailable (e.g. git.enabled = false)
     }

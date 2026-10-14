@@ -26,11 +26,19 @@ export interface BlameRequest {
   getText: () => string;
 }
 
+/** Minimal log sink so `GitService` can report to an Output channel without importing vscode. */
+export interface GitLogger {
+  info(message: string): void;
+  warn(message: string): void;
+}
+
 export interface GitServiceOptions {
   /** Remote used for commit links. Empty string = `origin`, else the first remote. */
   remoteName: string;
   /** Pass `.git-blame-ignore-revs` from the repository root when it exists. */
   useIgnoreRevsFile: boolean;
+  /** Optional custom URL template to override auto-detected web commit URLs. Empty string = auto-detect. */
+  commitUrlTemplate: string;
 }
 
 export type DateStyle = "relative" | "absolute" | "short";
@@ -63,4 +71,5 @@ export interface GitGlanceConfig {
   maxMessageLength: number;
   remote: string;
   useIgnoreRevsFile: boolean;
+  commitUrlTemplate: string;
 }

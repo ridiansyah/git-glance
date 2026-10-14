@@ -17,6 +17,7 @@ const AVATAR_COLORS = [
 ];
 
 const FETCH_TIMEOUT_MS = 2500;
+const MEMORY_CACHE_LIMIT = 200;
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type AvatarReadyListener = (key: string, avatarPath: string) => void;
@@ -117,16 +118,16 @@ export class AvatarService {
     }
 
     const hash = crypto.createHash("md5").update(key).digest("hex");
-    const photoSvgPath = path.join(this.avatarDir, `${hash}_photo_v4.svg`);
+    const photoSvgPath = path.join(this.avatarDir, `${hash}_photo_v5.svg`);
     const initialsSvgPath = path.join(
       this.avatarDir,
-      `${hash}_initials_v4.svg`,
+      `${hash}_initials_v5.svg`,
     );
-    const notFoundPath = path.join(this.avatarDir, `${hash}_none_v4`);
+    const notFoundPath = path.join(this.avatarDir, `${hash}_none_v5`);
 
     // 1. If photo SVG was already downloaded and wrapped, use it!
     if (allowRemote && fs.existsSync(photoSvgPath)) {
-      this.memoryCache.set(memoryKey, photoSvgPath);
+      this.remember(memoryKey, photoSvgPath);
       return photoSvgPath;
     }
 
@@ -140,7 +141,7 @@ export class AvatarService {
       }
     }
 
-    this.memoryCache.set(memoryKey, initialsSvgPath);
+    this.remember(memoryKey, initialsSvgPath);
 
     // 3. Fetch the photo in the background, unless a recent lookup found none
     if (
@@ -155,6 +156,16 @@ export class AvatarService {
     return initialsSvgPath;
   }
 
+  private remember(key: string, avatarPath: string) {
+    if (this.memoryCache.size >= MEMORY_CACHE_LIMIT) {
+      const oldest = this.memoryCache.keys().next();
+      if (!oldest.done) {
+        this.memoryCache.delete(oldest.value);
+      }
+    }
+    this.memoryCache.set(key, avatarPath);
+  }
+
   private isRecentlyNotFound(notFoundPath: string): boolean {
     try {
       return Date.now() - fs.statSync(notFoundPath).mtimeMs < NOT_FOUND_TTL_MS;
@@ -167,7 +178,7 @@ export class AvatarService {
    * Generates a compact, friendly 14x14 avatar for uncommitted edits.
    */
   private getYouAvatarPath(): string | null {
-    const youPath = path.join(this.avatarDir, "you_v4.svg");
+    const youPath = path.join(this.avatarDir, "you_v5.svg");
     if (this.memoryCache.has("__you__")) {
       return this.memoryCache.get("__you__")!;
     }
@@ -190,7 +201,7 @@ export class AvatarService {
       }
     }
 
-    this.memoryCache.set("__you__", youPath);
+    this.remember("__you__", youPath);
     return youPath;
   }
 
@@ -211,13 +222,13 @@ export class AvatarService {
    * Wraps downloaded raster image bytes into a circular 14x14 SVG wrapper.
    */
   public wrapImageInSvg(base64Data: string, mimeType: string): string {
-    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 14 14" width="14" height="14">
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14">
   <defs>
     <clipPath id="avatarClip">
       <circle cx="7" cy="7" r="7" />
     </clipPath>
   </defs>
-  <image href="data:${mimeType};base64,${base64Data}" xlink:href="data:${mimeType};base64,${base64Data}" width="14" height="14" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)" />
+  <image href="data:${mimeType};base64,${base64Data}" width="14" height="14" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)" />
   <circle cx="7" cy="7" r="6.6" fill="none" stroke="#ffffff22" stroke-width="0.8" />
 </svg>`;
   }
@@ -272,7 +283,7 @@ export class AvatarService {
     if (noreplyMatch !== null) {
       const username = noreplyMatch[1];
       candidates.push(async () =>
-        `https://github.com/${encodeURIComponent(username)}.png?size=64`,
+        `https://github.com/${encodeURIComponent(username)}.png?size=28`,
       );
     }
 
@@ -308,7 +319,7 @@ export class AvatarService {
           return null;
         }
         const url = new URL(avatarUrl);
-        url.searchParams.set("s", "64");
+        url.searchParams.set("s", "28");
         return url.toString();
       });
     }
@@ -316,7 +327,7 @@ export class AvatarService {
     if (cleanEmail.length > 0 && !cleanEmail.includes("noreply")) {
       const hash = crypto.createHash("md5").update(cleanEmail).digest("hex");
       candidates.push(async () =>
-        `https://www.gravatar.com/avatar/${hash}?s=64&d=404`,
+        `https://www.gravatar.com/avatar/${hash}?s=28&d=404`,
       );
     }
 
@@ -342,12 +353,12 @@ export class AvatarService {
         const base64Data = Buffer.from(await response.arrayBuffer()).toString(
           "base64",
         );
-        fs.writeFileSync(
+        await fs.promises.writeFile(
           targetSvgPath,
           this.wrapImageInSvg(base64Data, contentType),
           "utf8",
         );
-        this.memoryCache.set(key, targetSvgPath);
+        this.remember(key, targetSvgPath);
         this.notifyAvatarReady(key, targetSvgPath);
         return;
       } catch {

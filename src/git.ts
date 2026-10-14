@@ -1,11 +1,18 @@
 import * as cp from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { BlameInfo, BlameRequest, GitServiceOptions } from "./types";
+import { BlameInfo, BlameRequest, GitLogger, GitServiceOptions } from "./types";
+import { isInsideDir } from "./utils/paths";
+import { ParsedRemote, commitUrlFromParsed, parseRemoteUrl } from "./utils/remote";
 
 const FULL_BLAME_MAX_LINES = 2500;
-const CACHE_LIMIT = 5000;
+const FILE_CACHE_LIMIT = 16;
+const LINE_CACHE_LIMIT = 300;
 const UNCOMMITTED_SHA = "0".repeat(40);
+
+/** Expected failures (untracked file, not a repository) that would only add noise to the log. */
+const BENIGN_STDERR =
+  /not a git repository|no such path|has only \d+ lines?|no such ref|unknown revision|bad revision|invalid object name|could not open object name list/i;
 
 export type GitErrorKind = "aborted" | "timeout" | "exit" | "spawn";
 
@@ -41,8 +48,10 @@ interface BlameContext {
   repoRoot: string;
   isDirty: boolean;
   currentUserEmail: string | null;
-  rawRemote: string | null;
+  remote: ParsedRemote | null;
   ignoreRevsFile: string | null;
+  /** Web URL per sha, so lines of one commit share a single string. */
+  commitUrls: Map<string, string | null>;
 }
 
 /**
@@ -83,9 +92,10 @@ export class GitService {
   /** Repos whose ignore-revs file made git fail; blamed without it from then on. */
   private brokenIgnoreRevs = new Set<string>();
 
-  private blameCache = new Map<string, BlameInfo>();
-  private blameCacheByFile = new Map<string, Set<string>>();
-  private cacheKeyToFile = new Map<string, string>();
+  /** Whole-file blames keyed by `${file}:${version}`, least recently used first. */
+  private fileBlameCache = new Map<string, Map<number, BlameInfo>>();
+  /** Single-line blames (large or slow files) keyed by `${file}:${version}:${line}`. */
+  private lineBlameCache = new Map<string, BlameInfo>();
   private pendingFullBlame = new Map<string, PendingFullBlame>();
   /** Holds `${file}:${version}` (whole file failed) and `${file}:${version}:${line}` (one line failed). */
   private failedBlame = new Set<string>();
@@ -99,10 +109,20 @@ export class GitService {
   private options: GitServiceOptions = {
     remoteName: "",
     useIgnoreRevsFile: true,
+    commitUrlTemplate: "",
   };
   private timeouts: GitServiceTimeouts;
+  private gitPath = "git";
+  private loggedMessages = new Set<string>();
 
-  constructor(timeouts: Partial<GitServiceTimeouts> = {}) {
+  /** Called once when the git executable can't be started. */
+  public onGitMissing: (() => void) | undefined;
+  private reportedGitMissing = false;
+
+  constructor(
+    timeouts: Partial<GitServiceTimeouts> = {},
+    private logger?: GitLogger,
+  ) {
     this.timeouts = {
       fullBlameMs: 5000,
       lineBlameMs: 10000,
@@ -111,10 +131,39 @@ export class GitService {
     };
   }
 
+  /**
+   * Sets the git executable (VS Code's resolved `git.path`) and forgets everything
+   * learned with the previous one, including "not a repository" answers.
+   */
+  public setGitPath(gitPath: string) {
+    if (gitPath === this.gitPath) {
+      return;
+    }
+    this.gitPath = gitPath;
+    this.repoRootCache.clear();
+    this.clearCache();
+    this.logOnce("info", `Using git executable: ${gitPath}`);
+  }
+
+  /** Forgets cached repository roots (e.g. a folder became a repository). */
+  public resetRepoDiscovery() {
+    this.repoRootCache.clear();
+    this.clearCache();
+  }
+
+  private logOnce(level: "info" | "warn", message: string) {
+    if (this.logger === undefined || this.loggedMessages.has(message)) {
+      return;
+    }
+    this.loggedMessages.add(message);
+    this.logger[level](message);
+  }
+
   public setOptions(options: GitServiceOptions) {
     if (
       options.remoteName === this.options.remoteName &&
-      options.useIgnoreRevsFile === this.options.useIgnoreRevsFile
+      options.useIgnoreRevsFile === this.options.useIgnoreRevsFile &&
+      options.commitUrlTemplate === this.options.commitUrlTemplate
     ) {
       return;
     }
@@ -132,9 +181,8 @@ export class GitService {
         pending.controller.abort();
       }
       this.pendingFullBlame.clear();
-      this.blameCache.clear();
-      this.blameCacheByFile.clear();
-      this.cacheKeyToFile.clear();
+      this.fileBlameCache.clear();
+      this.lineBlameCache.clear();
       this.failedBlame.clear();
       this.currentUserEmailCache.clear();
       this.remoteUrlCache.clear();
@@ -146,16 +194,14 @@ export class GitService {
     const current = this.fileGeneration.get(filePath);
     this.fileGeneration.set(filePath, current === undefined ? 1 : current + 1);
 
-    const keys = this.blameCacheByFile.get(filePath);
-    if (keys) {
-      for (const key of keys) {
-        this.blameCache.delete(key);
-        this.cacheKeyToFile.delete(key);
-      }
-      this.blameCacheByFile.delete(filePath);
-    }
-
     const prefix = `${filePath}:`;
+    for (const cache of [this.fileBlameCache, this.lineBlameCache]) {
+      for (const key of cache.keys()) {
+        if (key.startsWith(prefix)) {
+          cache.delete(key);
+        }
+      }
+    }
     for (const key of this.failedBlame) {
       if (key.startsWith(prefix)) {
         this.failedBlame.delete(key);
@@ -173,13 +219,17 @@ export class GitService {
    * Clears blame results for every file inside a repository (e.g. after HEAD moved).
    */
   public clearRepoCache(repoRoot: string) {
-    const prefix = repoRoot.endsWith(path.sep) ? repoRoot : repoRoot + path.sep;
-    const files = new Set<string>(this.blameCacheByFile.keys());
-    for (const key of [...this.failedBlame, ...this.pendingFullBlame.keys()]) {
+    const files = new Set<string>();
+    for (const key of [
+      ...this.fileBlameCache.keys(),
+      ...this.lineBlameCache.keys(),
+      ...this.failedBlame,
+      ...this.pendingFullBlame.keys(),
+    ]) {
       files.add(this.fileOfKey(key));
     }
     for (const file of files) {
-      if (file.startsWith(prefix)) {
+      if (isInsideDir(repoRoot, file)) {
         this.clearCache(file);
       }
     }
@@ -205,7 +255,9 @@ export class GitService {
     documentVersion: number,
     line: number,
   ): boolean {
-    return this.touchCache(`${filePath}:${documentVersion}:${line}`) !== undefined;
+    return (
+      this.lookupCache(`${filePath}:${documentVersion}`, line) !== undefined
+    );
   }
 
   /**
@@ -219,11 +271,15 @@ export class GitService {
 
     try {
       const output = await this.execGit(["rev-parse", "--show-toplevel"], dir);
-      const root = output.trim();
+      // Git prints `C:/Users/x/repo` on Windows; keep native separators everywhere else.
+      const root = path.resolve(output.trim());
       this.repoRootCache.set(dir, root);
       return root;
-    } catch {
-      this.repoRootCache.set(dir, null);
+    } catch (err) {
+      // Only "not a repository" is a stable answer; a missing git or a timeout may pass.
+      if (isErrorKind(err, "exit")) {
+        this.repoRootCache.set(dir, null);
+      }
       return null;
     }
   }
@@ -296,47 +352,10 @@ export class GitService {
    * Converts a git remote URL into a web commit URL.
    */
   public formatCommitWebUrl(remoteUrl: string, sha: string): string | null {
-    let clean = remoteUrl.trim();
-    if (clean.endsWith(".git")) {
-      clean = clean.slice(0, -4);
-    }
-
-    // Handle ssh://[user@]host[:port]/path
-    if (clean.startsWith("ssh://")) {
-      clean = clean.replace(/^ssh:\/\/(?:[^@]+@)?/, "https://").replace(/:\d+\//, "/");
-    } else if (clean.startsWith("git@")) {
-      const match = clean.match(/^git@([^:]+):(.+)$/);
-      if (match) {
-        const [, host, repoPath] = match;
-        clean = `https://${host}/${repoPath}`;
-      }
-    }
-
-    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-      return null;
-    }
-
-    try {
-      const parsed = new URL(clean);
-      // Strip any sensitive credentials (token/username:password) to prevent leakage
-      parsed.username = "";
-      parsed.password = "";
-
-      const hostname = parsed.hostname.toLowerCase();
-      // Ensure pathname has no trailing slash
-      const cleanUrl = parsed.toString().replace(/\/$/, "");
-
-      if (hostname.includes("gitlab")) {
-        return `${cleanUrl}/-/commit/${sha}`;
-      }
-      if (hostname.includes("bitbucket.org")) {
-        return `${cleanUrl}/commits/${sha}`;
-      }
-      // GitHub and others
-      return `${cleanUrl}/commit/${sha}`;
-    } catch {
-      return null;
-    }
+    const parsed = parseRemoteUrl(remoteUrl);
+    return parsed === null
+      ? null
+      : commitUrlFromParsed(parsed, sha, this.options.commitUrlTemplate);
   }
 
   /**
@@ -352,9 +371,13 @@ export class GitService {
     const fileVersionKey = `${filePath}:${documentVersion}`;
     const cacheKey = `${fileVersionKey}:${line}`;
 
-    const cached = this.touchCache(cacheKey);
+    const cached = this.lookupCache(fileVersionKey, line);
     if (cached !== undefined) {
       return cached;
+    }
+    // A cached whole-file blame without this line means it lies past the last line.
+    if (this.fileBlameCache.has(fileVersionKey)) {
+      return null;
     }
 
     if (
@@ -388,8 +411,9 @@ export class GitService {
       repoRoot,
       isDirty,
       currentUserEmail,
-      rawRemote,
+      remote: rawRemote === null ? null : parseRemoteUrl(rawRemote),
       ignoreRevsFile,
+      commitUrls: new Map(),
     };
 
     if (
@@ -418,6 +442,10 @@ export class GitService {
         }
         // Deep history: fall through to single-line blame for this file.
         this.slowFullBlameFiles.add(filePath);
+        this.logOnce(
+          "warn",
+          `Whole-file blame timed out, using single-line blame for ${path.basename(filePath)}`,
+        );
       }
     }
 
@@ -446,7 +474,7 @@ export class GitService {
       this.enrich(blame, context, uncommittedDate);
 
       if (this.generationOf(filePath) === generation) {
-        this.setBlameCache(filePath, cacheKey, blame);
+        this.setLineCache(cacheKey, blame);
       }
       return blame;
     } catch (err) {
@@ -495,12 +523,11 @@ export class GitService {
           }
         }
 
-        const isCurrent = this.generationOf(filePath) === generation;
         for (const blame of map.values()) {
           this.enrich(blame, context, uncommittedDate);
-          if (isCurrent) {
-            this.setBlameCache(filePath, `${fileVersionKey}:${blame.line}`, blame);
-          }
+        }
+        if (this.generationOf(filePath) === generation) {
+          this.setFileCache(fileVersionKey, map);
         }
         return map;
       } finally {
@@ -522,6 +549,9 @@ export class GitService {
     timeoutMs: number,
   ): Promise<string> {
     const { repoRoot, filePath, ignoreRevsFile } = context;
+    // Run next to the file with a bare file name: no drive-letter, UNC or slash mismatch
+    // between VS Code's path and git's view of the repository is possible.
+    const cwd = path.dirname(filePath);
     const useIgnoreRevs =
       ignoreRevsFile !== null && !this.brokenIgnoreRevs.has(repoRoot);
 
@@ -533,13 +563,13 @@ export class GitService {
       if (withIgnoreRevs && ignoreRevsFile !== null) {
         args.push("--ignore-revs-file", ignoreRevsFile);
       }
-      args.push("--", filePath);
+      args.push("--", path.basename(filePath));
       return args;
     };
 
     const execOptions: ExecOptions = { stdin: contents, signal, timeoutMs };
     try {
-      return await this.execGit(buildArgs(useIgnoreRevs), repoRoot, execOptions);
+      return await this.execGit(buildArgs(useIgnoreRevs), cwd, execOptions);
     } catch (err) {
       // A malformed line in the ignore-revs file makes git exit before blaming.
       const ignoreRevsRejected =
@@ -551,7 +581,7 @@ export class GitService {
         throw err;
       }
       this.brokenIgnoreRevs.add(repoRoot);
-      return this.execGit(buildArgs(false), repoRoot, execOptions);
+      return this.execGit(buildArgs(false), cwd, execOptions);
     }
   }
 
@@ -573,8 +603,16 @@ export class GitService {
       blame.isUncommitted ||
       this.isCurrentUser(blame.authorEmail, context.currentUserEmail);
 
-    if (context.rawRemote !== null && !blame.isUncommitted) {
-      const remoteUrl = this.formatCommitWebUrl(context.rawRemote, blame.sha);
+    if (context.remote !== null && !blame.isUncommitted) {
+      let remoteUrl = context.commitUrls.get(blame.sha);
+      if (remoteUrl === undefined) {
+        remoteUrl = commitUrlFromParsed(
+          context.remote,
+          blame.sha,
+          this.options.commitUrlTemplate,
+        );
+        context.commitUrls.set(blame.sha, remoteUrl);
+      }
       if (remoteUrl !== null) {
         blame.remoteCommitUrl = remoteUrl;
       }
@@ -628,48 +666,43 @@ export class GitService {
       : key.slice(0, versionAt.index);
   }
 
-  /** Returns a cached entry and marks it most recently used. */
-  private touchCache(cacheKey: string): BlameInfo | undefined {
-    const cached = this.blameCache.get(cacheKey);
+  /** Looks a line up in the whole-file or single-line cache and marks the hit most recently used. */
+  private lookupCache(fileVersionKey: string, line: number): BlameInfo | undefined {
+    const fileMap = this.fileBlameCache.get(fileVersionKey);
+    if (fileMap !== undefined) {
+      this.fileBlameCache.delete(fileVersionKey);
+      this.fileBlameCache.set(fileVersionKey, fileMap);
+      return fileMap.get(line);
+    }
+
+    const lineKey = `${fileVersionKey}:${line}`;
+    const cached = this.lineBlameCache.get(lineKey);
     if (cached !== undefined) {
-      this.blameCache.delete(cacheKey);
-      this.blameCache.set(cacheKey, cached);
+      this.lineBlameCache.delete(lineKey);
+      this.lineBlameCache.set(lineKey, cached);
     }
     return cached;
   }
 
-  /**
-   * Sets blame into memory cache with LRU eviction guard.
-   */
-  private setBlameCache(filePath: string, key: string, blame: BlameInfo) {
-    if (this.blameCache.size >= CACHE_LIMIT) {
-      const oldestKey = this.blameCache.keys().next().value;
-      if (oldestKey) {
-        this.blameCache.delete(oldestKey);
-        // Clean up secondary index for evicted entry reliably across all OS platforms
-        const oldFile = this.cacheKeyToFile.get(oldestKey);
-        if (oldFile) {
-          this.cacheKeyToFile.delete(oldestKey);
-          const fileKeys = this.blameCacheByFile.get(oldFile);
-          if (fileKeys) {
-            fileKeys.delete(oldestKey);
-            if (fileKeys.size === 0) {
-              this.blameCacheByFile.delete(oldFile);
-            }
-          }
-        }
+  private setFileCache(fileVersionKey: string, map: Map<number, BlameInfo>) {
+    this.fileBlameCache.delete(fileVersionKey);
+    this.fileBlameCache.set(fileVersionKey, map);
+    if (this.fileBlameCache.size > FILE_CACHE_LIMIT) {
+      const oldest = this.fileBlameCache.keys().next();
+      if (!oldest.done) {
+        this.fileBlameCache.delete(oldest.value);
       }
     }
-    this.blameCache.set(key, blame);
-    this.cacheKeyToFile.set(key, filePath);
+  }
 
-    // Maintain secondary file index
-    let fileKeys = this.blameCacheByFile.get(filePath);
-    if (!fileKeys) {
-      fileKeys = new Set();
-      this.blameCacheByFile.set(filePath, fileKeys);
+  private setLineCache(lineKey: string, blame: BlameInfo) {
+    this.lineBlameCache.set(lineKey, blame);
+    if (this.lineBlameCache.size > LINE_CACHE_LIMIT) {
+      const oldest = this.lineBlameCache.keys().next();
+      if (!oldest.done) {
+        this.lineBlameCache.delete(oldest.value);
+      }
     }
-    fileKeys.add(key);
   }
 
   /**
@@ -903,12 +936,14 @@ export class GitService {
       }
 
       let isSettled = false;
-      const proc = cp.spawn("git", args, {
+      const proc = cp.spawn(this.gitPath, args, {
         cwd,
         windowsHide: true,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: "0",
+          // English messages: the stderr checks below must not depend on the OS language.
+          LC_ALL: "C",
         },
       });
 
@@ -961,6 +996,11 @@ export class GitService {
       });
 
       proc.on("error", (err) => {
+        this.logOnce("warn", `Cannot start git (${this.gitPath}): ${err.message}`);
+        if (!this.reportedGitMissing) {
+          this.reportedGitMissing = true;
+          this.onGitMissing?.();
+        }
         settle(new GitCommandError(err.message, "spawn"));
       });
 
@@ -968,6 +1008,9 @@ export class GitService {
         if (code === 0) {
           settle(null, Buffer.concat(stdoutChunks).toString("utf8"));
         } else {
+          if (!BENIGN_STDERR.test(stderr)) {
+            this.logOnce("warn", `git ${args[0]} failed (${code}): ${stderr.trim()}`);
+          }
           settle(
             new GitCommandError(`Git exited with code ${code}: ${stderr}`, "exit", stderr),
           );

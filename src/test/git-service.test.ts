@@ -195,7 +195,11 @@ test("GitService - honors .git-blame-ignore-revs, and survives a malformed one",
     assert.ok(ignored);
     assert.strictEqual(ignored.summary, "init");
 
-    gitService.setOptions({ remoteName: "", useIgnoreRevsFile: false });
+    gitService.setOptions({
+      remoteName: "",
+      useIgnoreRevsFile: false,
+      commitUrlTemplate: "",
+    });
     const plain = await gitService.getBlameForLine(request(file, 0));
     assert.ok(plain);
     assert.strictEqual(plain.summary, "reformat");
@@ -203,7 +207,11 @@ test("GitService - honors .git-blame-ignore-revs, and survives a malformed one",
     assert.strictEqual(plain.isCurrentUser, false);
 
     fs.writeFileSync(ignoreRevs, "not-a-sha\n");
-    gitService.setOptions({ remoteName: "", useIgnoreRevsFile: true });
+    gitService.setOptions({
+      remoteName: "",
+      useIgnoreRevsFile: true,
+      commitUrlTemplate: "",
+    });
     const fallback = await gitService.getBlameForLine(request(file, 0));
     assert.ok(fallback, "a malformed ignore-revs file must not break blame");
     assert.strictEqual(fallback.summary, "reformat");
@@ -232,7 +240,11 @@ test("GitService - remote selection", async () => {
       "https://github.com/me/fork.git",
     );
 
-    gitService.setOptions({ remoteName: "upstream", useIgnoreRevsFile: true });
+    gitService.setOptions({
+      remoteName: "upstream",
+      useIgnoreRevsFile: true,
+      commitUrlTemplate: "",
+    });
     assert.strictEqual(
       await gitService.getRemoteBaseUrl(root),
       "git@github.com:acme/upstream.git",
@@ -268,6 +280,142 @@ test("GitService - a blame finishing after clearCache isn't cached", async () =>
     await pending;
     assert.strictEqual(gitService.hasCachedBlame(file, 1, 0), false);
   } finally {
+    cleanup();
+  }
+});
+
+test("GitService - Bitbucket and other providers commit URL integration", async () => {
+  const { root, file, cleanup } = createRepo();
+  try {
+    const gitService = new GitService();
+    git(root, [
+      "remote",
+      "add",
+      "origin",
+      "ssh://git@bitbucket.company.com:7999/PROJ/repo.git",
+    ]);
+    const blame = await gitService.getBlameForLine(request(file, 0));
+    assert.ok(blame);
+    assert.strictEqual(
+      blame.remoteCommitUrl,
+      `https://bitbucket.company.com/projects/PROJ/repos/repo/commits/${blame.sha}`,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("GitService - one whole-file blame is one cache entry, dropped per file", async () => {
+  const { file, root, cleanup } = createRepo();
+  try {
+    git(root, ["remote", "add", "origin", "git@bitbucket.org:org/repo.git"]);
+    const gitService = new GitService();
+    const first = await gitService.getBlameForLine(request(file, 0));
+    const second = await gitService.getBlameForLine(request(file, 1));
+    assert.ok(first && second);
+    // Lines of one commit share a single URL string
+    assert.strictEqual(first.remoteCommitUrl, second.remoteCommitUrl);
+    assert.ok(first.remoteCommitUrl?.includes("/commits/"));
+
+    await gitService.getBlameForLine(request(file, 0, { documentVersion: 2 }));
+    assert.strictEqual(gitService.hasCachedBlame(file, 1, 2), true);
+    assert.strictEqual(gitService.hasCachedBlame(file, 2, 2), true);
+
+    gitService.clearCache(file);
+    assert.strictEqual(gitService.hasCachedBlame(file, 1, 0), false);
+    assert.strictEqual(gitService.hasCachedBlame(file, 2, 0), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("GitService - many cached files never evict each other's lines", async () => {
+  const { root, cleanup } = createRepo();
+  try {
+    const gitService = new GitService();
+    const files: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const name = path.join(root, `big-${i}.txt`);
+      fs.writeFileSync(name, Array.from({ length: 2400 }, (_, n) => `l${n}`).join("\n") + "\n");
+      git(root, ["add", `big-${i}.txt`]);
+      files.push(name);
+    }
+    git(root, ["commit", "-qm", "big"]);
+    for (const name of files) {
+      await gitService.getBlameForLine(request(name, 0, { lineCount: 2401 }));
+    }
+    for (const name of files) {
+      assert.strictEqual(gitService.hasCachedBlame(name, 1, 2399), true);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("GitService - getRepoRoot returns a native path", async () => {
+  const { root, file, cleanup } = createRepo();
+  try {
+    const gitService = new GitService();
+    assert.strictEqual(await gitService.getRepoRoot(file), path.resolve(root));
+  } finally {
+    cleanup();
+  }
+});
+
+test("GitService - a missing git executable isn't cached as 'not a repository'", async () => {
+  const { file, cleanup } = createRepo();
+  try {
+    const logged: string[] = [];
+    const gitService = new GitService({}, { info: () => {}, warn: (m) => logged.push(m) });
+    let reported = 0;
+    gitService.onGitMissing = () => reported++;
+
+    gitService.setGitPath("git-glance-no-such-git");
+    assert.strictEqual(await gitService.getBlameForLine(request(file, 0)), null);
+    assert.strictEqual(await gitService.getBlameForLine(request(file, 1)), null);
+    assert.strictEqual(reported, 1, "reported once, not per call");
+    assert.strictEqual(logged.filter((m) => m.startsWith("Cannot start git")).length, 1);
+
+    gitService.setGitPath("git");
+    const blame = await gitService.getBlameForLine(request(file, 0));
+    assert.ok(blame, "works once a real git is set");
+  } finally {
+    cleanup();
+  }
+});
+
+test("GitService - clearRepoCache accepts the repository root in either slash style", async () => {
+  const { root, file, cleanup } = createRepo();
+  try {
+    const gitService = new GitService();
+    await gitService.getBlameForLine(request(file, 0));
+    gitService.clearRepoCache(root.split(path.sep).join("/"));
+    assert.strictEqual(gitService.hasCachedBlame(file, 1, 0), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("GitService - git messages stay English under another locale", async () => {
+  const { file, cleanup } = createRepo();
+  const previous = { LANG: process.env.LANG, LANGUAGE: process.env.LANGUAGE };
+  process.env.LANG = "de_DE.UTF-8";
+  process.env.LANGUAGE = "de";
+  try {
+    const gitService = new GitService();
+    // Line 4 doesn't exist ("has only 3 lines"); the other lines must keep working.
+    const big = request(file, 3, { lineCount: 3000 });
+    assert.strictEqual(await gitService.getBlameForLine(big), null);
+    assert.ok(await gitService.getBlameForLine(request(file, 0, { lineCount: 3000 })));
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     cleanup();
   }
 });

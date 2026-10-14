@@ -181,7 +181,7 @@ export class DecorationManager {
 
     if (blame.remoteCommitUrl) {
       actions.push(
-        `[$(link-external) Open in Browser](${blame.remoteCommitUrl} "Open on GitHub / GitLab")`,
+        `[$(link-external) Open in Browser](${blame.remoteCommitUrl} "Open on remote (GitHub, GitLab, Bitbucket, etc.)")`,
       );
     }
 

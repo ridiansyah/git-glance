@@ -4,6 +4,33 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-14
+
+### Added
+
+- **`Git Glance: Show Log`**: an output channel with the git path in use and any git error (each message once). A Troubleshooting section in the README explains it.
+- **CI on Windows and macOS** next to Linux.
+- **Universal Git Remote Provider Detection**: Automatic zero-configuration commit URL generation for Bitbucket Cloud, Bitbucket Server / Data Center, Azure DevOps (`dev.azure.com`, `*.visualstudio.com`), AWS CodeCommit, Codeberg, SourceHut (`git.sr.ht`), Gitea, Forgejo, and Gitee.
+- **Custom Commit URL Template** (`gitGlance.commitUrlTemplate`): Escape-hatch setting allowing custom or proprietary internal Git servers to define custom web commit URLs using tokens (`${host}`, `${path}`, `${sha}`, `${shortSha}`, `${project}`, `${repo}`).
+
+### Changed
+
+- **Inclusive Remote Command**: Renamed Command Palette title from `Git Glance: Open Commit on Remote (GitHub/GitLab)` to `Git Glance: Open Commit on Remote` and updated hover tooltips to be provider-agnostic.
+
+- **Smaller, steadier blame cache**: a whole-file blame is now one cache entry per file version (16 kept), and single-line blames of large files keep the last 300. Before, three 2,000-line tabs evicted each other's lines and every tab switch started a new `git blame`.
+- **Avatars**: photos are requested at 28 px (enough for a 14 px badge at 2x) and the SVG wrapper embeds the image once instead of twice. Existing avatar cache files are rebuilt once (`_v5`).
+- The remote URL is parsed once per blame, and lines from the same commit share one link string.
+
+### Fixed
+
+- **Windows: no annotations**: Git Glance now runs the git executable VS Code found (`git.path`, registry, install folders) instead of assuming `git` is on `PATH`. A missing git shows one warning with a shortcut to the `git.path` setting. A failed lookup is no longer remembered as "not a repository".
+- **Windows paths**: repository roots and file paths are compared after normalizing slashes, drive-letter case and trailing separators. Before, commits made outside the editor never refreshed the cache on Windows. Blame runs from the file's own folder, so drive or network-path differences can't break it.
+- **Non-English git**: git runs with `LC_ALL=C`, so fallbacks that read git's error text work on any system language.
+- **Broken hover links**: spaces and parentheses in repository paths (for example an Azure DevOps project named `My Project`) are percent-encoded, so "Open in Browser" no longer breaks the hover markdown.
+- **Azure DevOps Server / TFS** on custom hosts is detected from the `/_git/` path segment.
+- **Bitbucket Cloud Commit Links**: Fixed "Open in Browser" for Bitbucket Cloud SSH via port 443 (`altssh.bitbucket.org`), remotes ending in `.git/` with a trailing slash, and scp-style SSH remotes using non-`git` usernames.
+- **Bitbucket Server / Data Center 404s**: Fixed on-premise Bitbucket URLs resolving to invalid 404 commit links; now properly maps `/scm/<project>/<repo>` and personal `~user` repositories to `/projects/<project>/repos/<repo>/commits/<sha>`.
+
 ## [1.2.0] - 2026-10-12
 
 ### Added

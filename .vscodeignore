@@ -10,6 +10,7 @@ pnpm-workspace.yaml
 AGENTS.md
 .github/**
 .agents/**
+.claude/**
 CONTRIBUTING.md
 SECURITY.md
 CODE_OF_CONDUCT.md

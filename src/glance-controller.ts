@@ -28,6 +28,7 @@ export class GlanceController {
     this.gitService.setOptions({
       remoteName: this.config.remote,
       useIgnoreRevsFile: this.config.useIgnoreRevsFile,
+      commitUrlTemplate: this.config.commitUrlTemplate,
     });
 
     if (this.avatarService) {
@@ -59,6 +60,7 @@ export class GlanceController {
     this.gitService.setOptions({
       remoteName: this.config.remote,
       useIgnoreRevsFile: this.config.useIgnoreRevsFile,
+      commitUrlTemplate: this.config.commitUrlTemplate,
     });
     this.updateBlame(vscode.window.activeTextEditor, true);
   }
@@ -355,6 +357,7 @@ export class GlanceController {
       maxMessageLength: wsConfig.get<number>("maxMessageLength", 60),
       remote: wsConfig.get<string>("remote", ""),
       useIgnoreRevsFile: wsConfig.get<boolean>("useIgnoreRevsFile", true),
+      commitUrlTemplate: wsConfig.get<string>("commitUrlTemplate", ""),
     };
   }
 }

@@ -6,7 +6,13 @@ import * as path from "node:path";
 import { formatRelativeTime, formatCustomDate } from "../utils/date";
 import { GitService, createUncommittedBlame } from "../git";
 import { formatInlineText, escapeMarkdown, truncateText } from "../utils/format";
+import {
+  commitWebUrl,
+  parseRemoteUrl,
+  detectProvider,
+} from "../utils/remote";
 import { GitGlanceConfig } from "../types";
+import { isInsideDir, normalizeFsPath } from "../utils/paths";
 import { AvatarService } from "../utils/avatar";
 
 test("Date utilities - formatRelativeTime", () => {
@@ -106,47 +112,127 @@ test("Date utilities - formatCustomDate", () => {
   assert.strictEqual(formatCustomDate(new Date(NaN)), "");
 });
 
-test("GitService - formatCommitWebUrl", () => {
+test("GitService - formatCommitWebUrl and remote providers", () => {
   const gitService = new GitService();
 
-  // GitHub SSH
-  const ghSsh = gitService.formatCommitWebUrl(
-    "git@github.com:ridiansyah/git-glance.git",
-    "abc1234",
-  );
+  // GitHub SSH & HTTPS
   assert.strictEqual(
-    ghSsh,
+    gitService.formatCommitWebUrl("git@github.com:ridiansyah/git-glance.git", "abc1234"),
     "https://github.com/ridiansyah/git-glance/commit/abc1234",
   );
-
-  // GitHub HTTPS
-  const ghHttps = gitService.formatCommitWebUrl(
-    "https://github.com/ridiansyah/git-glance.git",
-    "abc1234",
-  );
   assert.strictEqual(
-    ghHttps,
+    gitService.formatCommitWebUrl("https://github.com/ridiansyah/git-glance.git", "abc1234"),
     "https://github.com/ridiansyah/git-glance/commit/abc1234",
   );
-
-  // GitLab SSH
-  const glSsh = gitService.formatCommitWebUrl(
-    "git@gitlab.com:ridiansyah/git-glance.git",
-    "abc1234",
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://github.com/ridiansyah/git-glance.git/", "abc1234"),
+    "https://github.com/ridiansyah/git-glance/commit/abc1234",
   );
   assert.strictEqual(
-    glSsh,
+    gitService.formatCommitWebUrl("ssh://git@ssh.github.com:443/o/r.git", "abc1234"),
+    "https://github.com/o/r/commit/abc1234",
+  );
+
+  // GitLab SSH, HTTPS, and Subgroups
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@gitlab.com:ridiansyah/git-glance.git", "abc1234"),
     "https://gitlab.com/ridiansyah/git-glance/-/commit/abc1234",
   );
-
-  // Bitbucket
-  const bb = gitService.formatCommitWebUrl(
-    "git@bitbucket.org:org/repo.git",
-    "abc1234",
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://gitlab.company.com/group/sub/repo.git/", "abc1234"),
+    "https://gitlab.company.com/group/sub/repo/-/commit/abc1234",
   );
-  assert.strictEqual(bb, "https://bitbucket.org/org/repo/commits/abc1234");
 
-  // Credential stripping (token security)
+  // Bitbucket Cloud (Standard SSH, HTTPS, Alt-SSH port 443, trailing slash, custom username)
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@bitbucket.org:org/repo.git", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://user@bitbucket.org/org/repo.git", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://bitbucket.org/org/repo", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("ssh://git@altssh.bitbucket.org:443/org/repo.git", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://username@bitbucket.org/org/repo.git/", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("bob@bitbucket.org:org/repo.git", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+
+  // Bitbucket Server / Data Center (on-premise)
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("ssh://git@bitbucket.company.com:7999/PROJ/repo.git", "abc1234"),
+    "https://bitbucket.company.com/projects/PROJ/repos/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://user@bitbucket.company.com/scm/proj/repo.git", "abc1234"),
+    "https://bitbucket.company.com/projects/proj/repos/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://bitbucket.company.com:8443/scm/proj/repo.git", "abc1234"),
+    "https://bitbucket.company.com:8443/projects/proj/repos/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://bitbucket.company.com/stash/scm/proj/repo.git", "abc1234"),
+    "https://bitbucket.company.com/stash/projects/proj/repos/repo/commits/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("ssh://git@bitbucket.company.com:7999/~john/repo.git", "abc1234"),
+    "https://bitbucket.company.com/users/john/repos/repo/commits/abc1234",
+  );
+
+  // Azure DevOps
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@ssh.dev.azure.com:v3/org/project/repo", "abc1234"),
+    "https://dev.azure.com/org/project/_git/repo/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://org@dev.azure.com/org/project/_git/repo", "abc1234"),
+    "https://dev.azure.com/org/project/_git/repo/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://org.visualstudio.com/project/_git/repo", "abc1234"),
+    "https://org.visualstudio.com/project/_git/repo/commit/abc1234",
+  );
+
+  // AWS CodeCommit
+  assert.strictEqual(
+    gitService.formatCommitWebUrl(
+      "https://git-codecommit.us-east-1.amazonaws.com/v1/repos/my-repo",
+      "abc1234",
+    ),
+    "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/commit/abc1234?region=us-east-1",
+  );
+
+  // Other Git Providers (Codeberg, SourceHut, Gitea, Gitee)
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@codeberg.org:user/repo.git", "abc1234"),
+    "https://codeberg.org/user/repo/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@git.sr.ht:~user/repo", "abc1234"),
+    "https://git.sr.ht/~user/repo/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@gitea.company.com:user/repo.git", "abc1234"),
+    "https://gitea.company.com/user/repo/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@gitee.com:user/repo.git", "abc1234"),
+    "https://gitee.com/user/repo/commit/abc1234",
+  );
+
+  // Token & credential stripping
   const credentialUrl = gitService.formatCommitWebUrl(
     "https://oauth2:ghp_SECRET_TOKEN_12345@github.com/myorg/myrepo.git",
     "abc1234",
@@ -156,25 +242,96 @@ test("GitService - formatCommitWebUrl", () => {
     "https://github.com/myorg/myrepo/commit/abc1234",
   );
 
-  // False-positive GitLab URL on GitHub (github.com repo named gitlab-tools)
-  const ghGitLabTools = gitService.formatCommitWebUrl(
-    "https://github.com/acme/gitlab-tools.git",
-    "abc1234",
-  );
+  // False-positive provider name in repo name (e.g. gitlab-tools on GitHub, stash-utils on GitHub)
   assert.strictEqual(
-    ghGitLabTools,
+    gitService.formatCommitWebUrl("https://github.com/acme/gitlab-tools.git", "abc1234"),
     "https://github.com/acme/gitlab-tools/commit/abc1234",
   );
-
-  // ssh:// format with port
-  const sshWithPort = gitService.formatCommitWebUrl(
-    "ssh://git@gitlab.company.com:2222/group/project.git",
-    "abc1234",
-  );
   assert.strictEqual(
-    sshWithPort,
+    gitService.formatCommitWebUrl("https://github.com/acme/stash-utils.git", "abc1234"),
+    "https://github.com/acme/stash-utils/commit/abc1234",
+  );
+
+  // ssh:// format with non-standard SSH port
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("ssh://git@gitlab.company.com:2222/group/project.git", "abc1234"),
     "https://gitlab.company.com/group/project/-/commit/abc1234",
   );
+
+  // Edge cases: numeric subgroup/username in SCP syntax
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@gitlab.com:123/repo.git", "abc1234"),
+    "https://gitlab.com/123/repo/-/commit/abc1234",
+  );
+
+  // Edge cases: path containing 'scm' on GitHub or GitLab should NOT trigger Bitbucket Server
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://github.com/scm/tools.git", "abc1234"),
+    "https://github.com/scm/tools/commit/abc1234",
+  );
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("git@gitlab.company.com:infra/scm/tools.git", "abc1234"),
+    "https://gitlab.company.com/infra/scm/tools/-/commit/abc1234",
+  );
+
+  // Edge cases: path starting with 'v3' on GitLab should NOT trigger Azure DevOps
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("https://gitlab.com/v3/group/repo.git", "abc1234"),
+    "https://gitlab.com/v3/group/repo/-/commit/abc1234",
+  );
+
+  // Edge cases: Bitbucket Server on unrecognized hostname via SSH port 7999
+  assert.strictEqual(
+    gitService.formatCommitWebUrl("ssh://git@git.company.com:7999/PROJ/repo.git", "abc1234"),
+    "https://git.company.com/projects/PROJ/repos/repo/commits/abc1234",
+  );
+
+  // Local files, drive letters, and invalid remotes return null
+  assert.strictEqual(gitService.formatCommitWebUrl("file:///tmp/repo.git", "abc1234"), null);
+  assert.strictEqual(gitService.formatCommitWebUrl("/tmp/repo.git", "abc1234"), null);
+  assert.strictEqual(gitService.formatCommitWebUrl("C:\\repo\\git", "abc1234"), null);
+  assert.strictEqual(gitService.formatCommitWebUrl("", "abc1234"), null);
+  assert.strictEqual(gitService.formatCommitWebUrl("https://github.com/o/r.git", "0000000000000000000000000000000000000000"), null);
+
+  // Custom template override
+  const customService = new GitService();
+  customService.setOptions({
+    remoteName: "",
+    useIgnoreRevsFile: true,
+    commitUrlTemplate: "https://${host}/custom-view/${path}/rev/${sha}",
+  });
+  assert.strictEqual(
+    customService.formatCommitWebUrl("git@bitbucket.org:org/repo.git", "abc1234"),
+    "https://bitbucket.org/custom-view/org/repo/rev/abc1234",
+  );
+
+  // Malicious/invalid custom template fallback
+  customService.setOptions({
+    remoteName: "",
+    useIgnoreRevsFile: true,
+    commitUrlTemplate: "javascript:alert(1)",
+  });
+  // If custom template is not valid http(s), falls back to null or auto-detect safely
+  assert.strictEqual(
+    customService.formatCommitWebUrl("git@bitbucket.org:org/repo.git", "abc1234"),
+    "https://bitbucket.org/org/repo/commits/abc1234",
+  );
+});
+
+test("remote utility - parseRemoteUrl and detectProvider", () => {
+  const parsedBb = parseRemoteUrl("ssh://git@altssh.bitbucket.org:443/org/repo.git");
+  assert.ok(parsedBb);
+  assert.strictEqual(parsedBb.host, "bitbucket.org");
+  assert.strictEqual(parsedBb.path, "org/repo");
+  assert.strictEqual(detectProvider(parsedBb), "bitbucket-cloud");
+
+  const parsedBbServer = parseRemoteUrl("ssh://git@git.internal.net:7999/PROJECT/repo.git");
+  assert.ok(parsedBbServer);
+  assert.strictEqual(parsedBbServer.sshPort, "7999");
+  assert.strictEqual(detectProvider(parsedBbServer), "bitbucket-server");
+
+  const parsedDirect = commitWebUrl("git@github.com:org/repo.git", "sha123");
+  assert.strictEqual(parsedDirect, "https://github.com/org/repo/commit/sha123");
 });
 
 test("FormatPresets - default and presets", () => {
@@ -217,6 +374,7 @@ test("FormatPresets - default and presets", () => {
     maxMessageLength: 0,
     remote: "",
     useIgnoreRevsFile: true,
+    commitUrlTemplate: "",
   };
 
   // 1. Default preset
@@ -556,6 +714,7 @@ test("formatInlineText - maxMessageLength, unknown preset, synthesized uncommitt
     maxMessageLength: 12,
     remote: "",
     useIgnoreRevsFile: true,
+    commitUrlTemplate: "",
   };
 
   const blame = {
@@ -600,10 +759,50 @@ test("AvatarService - initials-only mode never resolves a photo", () => {
       "https://github.com/acme/app/commit/1234567890abcdef1234567890abcdef12345678",
     );
     assert.ok(avatarPath);
-    assert.strictEqual(avatarPath.endsWith("_initials_v4.svg"), true);
+    assert.strictEqual(avatarPath.endsWith("_initials_v5.svg"), true);
     assert.strictEqual(fs.readFileSync(avatarPath, "utf8").includes(">JD<"), true);
     avatarService.dispose();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("remote utility - encodes path segments and detects on-prem Azure DevOps", () => {
+  assert.strictEqual(
+    commitWebUrl("git@ssh.dev.azure.com:v3/org/My Project/repo", "abc1234"),
+    "https://dev.azure.com/org/My%20Project/_git/repo/commit/abc1234",
+  );
+  // Already-encoded URL remotes are not encoded twice
+  assert.strictEqual(
+    commitWebUrl("https://dev.azure.com/org/My%20Project/_git/repo", "abc1234"),
+    "https://dev.azure.com/org/My%20Project/_git/repo/commit/abc1234",
+  );
+  // Parentheses would end a markdown link early
+  assert.strictEqual(
+    commitWebUrl("https://git.example.com/team/repo(1).git", "abc1234"),
+    "https://git.example.com/team/repo%281%29/commit/abc1234",
+  );
+  // Azure DevOps Server / TFS on an unknown host
+  const tfs = parseRemoteUrl("https://tfs.corp.local/tfs/Collection/Proj/_git/repo");
+  assert.ok(tfs);
+  assert.strictEqual(detectProvider(tfs), "azure-devops");
+  // Bitbucket Server behind a context path
+  assert.strictEqual(
+    commitWebUrl("https://git.corp.local/bitbucket/scm/PROJ/repo.git", "abc1234"),
+    "https://git.corp.local/bitbucket/projects/PROJ/repos/repo/commits/abc1234",
+  );
+});
+
+test("paths - Windows and POSIX paths compare equal across slash and case styles", () => {
+  assert.strictEqual(normalizeFsPath("C:/Users/X/Repo/", "win32"), "c:\\users\\x\\repo");
+  assert.strictEqual(normalizeFsPath("c:\\Users\\x\\repo", "win32"), "c:\\users\\x\\repo");
+  assert.strictEqual(normalizeFsPath("C:\\", "win32"), "c:\\");
+  assert.strictEqual(normalizeFsPath("/home/Me/repo/", "linux"), "/home/Me/repo");
+
+  assert.strictEqual(isInsideDir("C:/Repo", "c:\\repo\\src\\a.ts", "win32"), true);
+  assert.strictEqual(isInsideDir("C:/Repo", "C:\\Repo", "win32"), true);
+  assert.strictEqual(isInsideDir("C:/repo", "C:\\repo2\\a.ts", "win32"), false);
+  assert.strictEqual(isInsideDir("\\\\srv\\share\\repo", "\\\\SRV\\share\\repo\\a.ts", "win32"), true);
+  assert.strictEqual(isInsideDir("/home/me/Repo", "/home/me/repo/a.ts", "linux"), false);
+  assert.strictEqual(isInsideDir("/home/me/repo", "/home/me/repo/a.ts", "linux"), true);
 });

@@ -55,7 +55,7 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
   - Author name, email, and exact commit timestamp.
   - Short commit SHA.
   - Formatted commit subject and multi-line body.
-  - Quick action buttons: **Copy Hash**, **View Details**, and **Open on Web** (GitHub / GitLab incl. self-hosted / Bitbucket).
+  - Quick action buttons: **Copy Hash**, **View Details**, and **Open on Web** (GitHub, GitLab, Bitbucket Cloud/Server, Azure DevOps, Codeberg, and more).
 - **🎨 Theme-Adaptive**: Automatically blends with your favorite VS Code light and dark color themes.
 - **🛠️ Fully Configurable**: Personalize prefix emojis, text templates, date formats, and debounce speed.
 
@@ -109,13 +109,14 @@ const session = authService.init();    You, 3 hours ago: Uncommitted changes
 
 Access these commands anytime from the VS Code Command Palette (`Cmd + Shift + P` on macOS, `Ctrl + Shift + P` on Windows/Linux):
 
-| Command                                             | Description                                                             |
-| :-------------------------------------------------- | :---------------------------------------------------------------------- |
-| `Git Glance: Toggle Inline Blame`                   | Quickly toggle inline annotations on or off.                            |
-| `Git Glance: Toggle Avatar`                         | Quickly toggle avatar profile pictures / initials badges on or off.     |
-| `Git Glance: Copy Commit Hash`                      | Copies the commit SHA of the current line to the clipboard.             |
-| `Git Glance: Show Commit Details`                   | Opens an interactive QuickPick showing full commit details and actions. |
-| `Git Glance: Open Commit on Remote (GitHub/GitLab)` | Opens the current commit page in your default browser.                  |
+| Command                             | Description                                                             |
+| :---------------------------------- | :---------------------------------------------------------------------- |
+| `Git Glance: Toggle Inline Blame`   | Quickly toggle inline annotations on or off.                            |
+| `Git Glance: Toggle Avatar`         | Quickly toggle avatar profile pictures / initials badges on or off.     |
+| `Git Glance: Copy Commit Hash`      | Copies the commit SHA of the current line to the clipboard.             |
+| `Git Glance: Show Commit Details`   | Opens an interactive QuickPick showing full commit details and actions. |
+| `Git Glance: Open Commit on Remote` | Opens the current commit page in your default browser.                  |
+| `Git Glance: Show Log`              | Opens the Git Glance output channel (git path used, errors).            |
 
 ---
 
@@ -131,6 +132,7 @@ Open VS Code **Settings** (`Cmd + ,` or `Ctrl + ,`) and search for `Git Glance`:
 | `gitGlance.avatarSource`      | `"remote"`                         | `"remote"` downloads photos (see [Privacy](#-privacy)); `"initials"` uses local initials badges only.                                                                       |
 | `gitGlance.maxMessageLength`  | `60`                               | Shorten the inline commit message to this many characters (`0` = no limit).                                                                                               |
 | `gitGlance.remote`            | `""`                               | Remote used for "Open in Browser" links. Empty = `origin`, or the first remote if there is no `origin`.                                                                    |
+| `gitGlance.commitUrlTemplate` | `""`                               | Custom URL template overriding auto-detection for web commit links (e.g. for custom/internal Git servers). Available tokens: `${host}`, `${path}`, `${sha}`, `${shortSha}`, `${project}`, `${repo}`. Use it when the remote host is an SSH alias (for example `git@github-work:org/repo`) or a self-hosted server Git Glance can't recognise. |
 | `gitGlance.useIgnoreRevsFile` | `true`                             | Skip commits listed in the repository's `.git-blame-ignore-revs` file.                                                                                                      |
 | `gitGlance.format`            | `"${author}, ${time}: ${message}"` | Custom template for inline annotation (used when preset is `"custom"`).                                                                                                    |
 | `gitGlance.uncommittedFormat` | `"${author}, ${time}: ${message}"` | Custom template for uncommitted lines (used when preset is `"custom"`).                                                                                                    |
@@ -176,6 +178,15 @@ Customize the exact timestamp displayed in the hover card tooltip using these to
 | `MMM` / `MMMM` | Month name (short / full)          | `Sep`, `September`        |
 | `ddd` / `dddd` | Weekday name (short / full)        | `Fri`, `Friday`           |
 | `[...]`        | Escaped literal text               | `[at] HH:mm` → `at 14:10` |
+
+---
+
+## 🩺 Troubleshooting
+
+Nothing shows on the current line? Run `Git Glance: Show Log`. It lists the git executable in use and any error from git.
+
+- **git not found**: Git Glance uses the same git as VS Code. Install git, or set `git.path` in your settings.
+- **"dubious ownership"** in the log: run `git config --global --add safe.directory <repo path>`.
 
 ---
 
