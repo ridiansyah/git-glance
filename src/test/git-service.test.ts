@@ -8,7 +8,10 @@ import { GitService } from "../git";
 import { BlameRequest } from "../types";
 
 // Keep the developer's global git config (signing, ignore-revs, ...) out of these tests.
-process.env.GIT_CONFIG_GLOBAL = os.devNull;
+// An empty file, not os.devNull: on Windows that is `\\.\nul`, which git can't open.
+const emptyGlobalConfig = path.join(fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "git-glance-cfg-")), "gitconfig");
+fs.writeFileSync(emptyGlobalConfig, "");
+process.env.GIT_CONFIG_GLOBAL = emptyGlobalConfig;
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 const ME = { name: "Test Author", email: "author@example.com" };

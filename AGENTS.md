@@ -253,7 +253,7 @@ For uncommitted lines (`gitGlance.uncommittedFormat`), tokens `${author}`, `${me
   - Sensitive credential stripping: all token/username:password credentials embedded in remote URLs are stripped before generating browser links.
   - `gitGlance.commitUrlTemplate`: Optional escape hatch allowing users to supply custom templates (e.g. `https://${host}/custom/${project}/${repo}/commit/${sha}`) with `${host}`, `${path}`, `${sha}`, `${shortSha}`, `${project}`, `${repo}` tokens. Replaced via single-pass regex and validated for `http(s)://` security.
 - **Configuration Changes**: `toggle` / `toggleAvatar` only write the setting; `onDidChangeConfiguration` → `reloadConfig` re-renders. Configuration changes never recreate decoration types.
-- **Testing GitService**: `src/test/git-service.test.ts` creates real repos under `fs.realpathSync(os.tmpdir())` and sets `GIT_CONFIG_GLOBAL=os.devNull` / `GIT_CONFIG_NOSYSTEM=1` so the developer's git config (commit signing, ignore-revs) can't affect results. Add a test there for every change to blame execution, caching, or error handling.
+- **Testing GitService**: `src/test/git-service.test.ts` creates real repos under `fs.realpathSync(os.tmpdir())` and sets `GIT_CONFIG_GLOBAL=<empty temp file>` (never `os.devNull`: on Windows it is `\\.\nul`, which git can't open) / `GIT_CONFIG_NOSYSTEM=1` so the developer's git config (commit signing, ignore-revs) can't affect results. Add a test there for every change to blame execution, caching, or error handling.
 
 ### 4.3 Git Commit Policy
 
