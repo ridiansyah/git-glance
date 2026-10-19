@@ -4,6 +4,15 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-10-19
+
+### Changed
+
+- **Documentation & Metrics Alignment**:
+  - Updated bundle and package size metrics across badges, comparison table, and feature list to reflect the current distribution footprints (~39 KB bundle, ~42 KB VSIX).
+  - Added `${date}` and `${isoDate}` token documentation for uncommitted custom formats (`gitGlance.uncommittedFormat`).
+  - Updated local VSIX installation examples to reference `git-glance-1.3.2.vsix`.
+
 ## [1.3.1] - 2026-10-14
 
 ### Added

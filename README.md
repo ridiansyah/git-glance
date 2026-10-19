@@ -8,8 +8,8 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://badgen.net/vs-marketplace/v/ridiansyah.git-glance" alt="VS Code Marketplace"></a>
   <a href="https://github.com/ridiansyah/git-glance/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/vscode-%5E1.85.0-blue.svg" alt="VS Code Version">
-  <img src="https://img.shields.io/badge/bundle%20size-%7E34%20KB-brightgreen.svg" alt="Bundle Size">
-  <img src="https://img.shields.io/badge/package%20size-%3C%2040%20KB-brightgreen.svg" alt="Package Size">
+  <img src="https://img.shields.io/badge/bundle%20size-%7E39%20KB-brightgreen.svg" alt="Bundle Size">
+  <img src="https://img.shields.io/badge/package%20size-%7E42%20KB-brightgreen.svg" alt="Package Size">
   <a href="https://github.com/ridiansyah/git-glance/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -31,8 +31,8 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 | Feature / Metric           | ⚡ Git Glance                                                                                            | Heavy Git Extensions (e.g. GitLens)        |
 | :------------------------- | :------------------------------------------------------------------------------------------------------ | :----------------------------------------- |
-| **Package Size (VSIX)**    | **~38 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
-| **Minified Bundle**        | **~34 KB**                                                                                              | **~5 - 10 MB**                             |
+| **Package Size (VSIX)**    | **~42 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
+| **Minified Bundle**        | **~39 KB**                                                                                              | **~5 - 10 MB**                             |
 | **Runtime Dependencies**   | **0** (Zero external dependencies)                                                                      | Dozens of npm packages                     |
 | **Startup Impact**         | **0 ms** (`onStartupFinished`)                                                                          | Often adds noticeable startup delay        |
 | **Blame Execution**        | **Hybrid blame** (0ms in-memory cache per file version + targeted 1-line blame for large files)          | Full-file / repository indexing            |
@@ -44,7 +44,7 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 ## ✨ Features
 
-- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~34 KB file with zero runtime dependencies.
+- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~39 KB file with zero runtime dependencies.
 - **⚡ Instant 0ms Lookups & Zero-Debounce**: Files are blamed once per edit and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
 - **🛡️ Process Cancellation & Zero DOM Churn**: Automatically aborts obsolete in-flight Git processes on fast cursor navigation and reuses persistent decoration types to eliminate Monaco stylesheet churn.
 - **🔋 Battery-Friendly Typing**: The line you are typing on shows `You, just now: Uncommitted changes` without running Git at all.
@@ -159,7 +159,7 @@ When `gitGlance.preset` is set to `"custom"`, you can freely compose your own li
 | `${fullHash}`              | Full 40-character commit SHA      | `7a8f3b2...`          |
 | `${prefix}`                | Custom prefix string/emoji        | `👀 `                 |
 
-For uncommitted lines (`gitGlance.uncommittedFormat`), `${author}`, `${message}`, `${prefix}`, and `${time}` are supported.
+For uncommitted lines (`gitGlance.uncommittedFormat`), `${author}`, `${message}`, `${prefix}`, `${time}`, `${date}`, and `${isoDate}` are supported.
 
 ### Hover Date Format Tokens (`gitGlance.hoverDateFormat`):
 
@@ -225,7 +225,7 @@ code --install-extension ridiansyah.git-glance
 Download the latest `git-glance-x.x.x.vsix` from [GitHub Releases](https://github.com/ridiansyah/git-glance/releases) or build it locally, then:
 
 ```bash
-code --install-extension git-glance-1.0.0.vsix
+code --install-extension git-glance-1.3.2.vsix
 ```
 
 _Or via VS Code UI: Extensions view (`Cmd+Shift+X`) ➔ `...` menu at top right ➔ **Install from VSIX...** ➔ Select the `.vsix` file._

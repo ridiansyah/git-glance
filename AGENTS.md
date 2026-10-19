@@ -21,7 +21,7 @@
 - **Package Manager**: `pnpm` (run with `pnpm install`, `pnpm run compile`, `pnpm test`).
 - **Language**: TypeScript (ES2022 target, strict mode enabled).
 - **Bundler**: `esbuild` (CJS bundle into `dist/extension.js`, externalizing `vscode`, `--target=node18` to match the Node runtime of VS Code 1.85's Electron).
-- **Packaging**: `@vscode/vsce` (~37 KB minified bundle / ~41 KB total `.vsix` with icon).
+- **Packaging**: `@vscode/vsce` (~39 KB minified bundle / ~42 KB total `.vsix` with icon).
 - **Testing**: Built-in `node:test` runner (`pnpm test`) compiling tests on the fly via `esbuild`. Pure-function tests live in `unit.test.ts`; `git-service.test.ts` runs `GitService` against real temporary git repositories.
 
 ---
