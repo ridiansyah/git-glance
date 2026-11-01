@@ -8,8 +8,8 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ridiansyah.git-glance"><img src="https://badgen.net/vs-marketplace/v/ridiansyah.git-glance" alt="VS Code Marketplace"></a>
   <a href="https://github.com/ridiansyah/git-glance/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/vscode-%5E1.85.0-blue.svg" alt="VS Code Version">
-  <img src="https://img.shields.io/badge/bundle%20size-%7E39%20KB-brightgreen.svg" alt="Bundle Size">
-  <img src="https://img.shields.io/badge/package%20size-%7E42%20KB-brightgreen.svg" alt="Package Size">
+  <img src="https://img.shields.io/badge/bundle%20size-%7E42%20KB-brightgreen.svg" alt="Bundle Size">
+  <img src="https://img.shields.io/badge/package%20size-%7E45%20KB-brightgreen.svg" alt="Package Size">
   <a href="https://github.com/ridiansyah/git-glance/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -31,8 +31,8 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 | Feature / Metric           | ⚡ Git Glance                                                                                            | Heavy Git Extensions (e.g. GitLens)        |
 | :------------------------- | :------------------------------------------------------------------------------------------------------ | :----------------------------------------- |
-| **Package Size (VSIX)**    | **~42 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
-| **Minified Bundle**        | **~39 KB**                                                                                              | **~5 - 10 MB**                             |
+| **Package Size (VSIX)**    | **~45 KB**                                                                                              | **~25 - 40 MB** (~1000× larger)            |
+| **Minified Bundle**        | **~42 KB**                                                                                              | **~5 - 10 MB**                             |
 | **Runtime Dependencies**   | **0** (Zero external dependencies)                                                                      | Dozens of npm packages                     |
 | **Startup Impact**         | **0 ms** (`onStartupFinished`)                                                                          | Often adds noticeable startup delay        |
 | **Blame Execution**        | **Hybrid blame** (0ms in-memory cache per file version + targeted 1-line blame for large files)          | Full-file / repository indexing            |
@@ -44,7 +44,7 @@ No bloat, no complex menus, and zero background clutter. Just a clean, modern, a
 
 ## ✨ Features
 
-- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~39 KB file with zero runtime dependencies.
+- **⚡ Blazing Fast & Ultra-Lightweight**: Bundled with `esbuild` into a single ~42 KB file with zero runtime dependencies.
 - **⚡ Instant 0ms Lookups & Zero-Debounce**: Files are blamed once per edit and cached in memory, resolving cursor movements in 0ms with zero spawned Git subprocesses.
 - **🛡️ Process Cancellation & Zero DOM Churn**: Automatically aborts obsolete in-flight Git processes on fast cursor navigation and reuses persistent decoration types to eliminate Monaco stylesheet churn.
 - **🔋 Battery-Friendly Typing**: The line you are typing on shows `You, just now: Uncommitted changes` without running Git at all.
@@ -113,6 +113,7 @@ Access these commands anytime from the VS Code Command Palette (`Cmd + Shift + P
 | :---------------------------------- | :---------------------------------------------------------------------- |
 | `Git Glance: Toggle Inline Blame`   | Quickly toggle inline annotations on or off.                            |
 | `Git Glance: Toggle Avatar`         | Quickly toggle avatar profile pictures / initials badges on or off.     |
+| `Git Glance: Sign in to GitHub for Avatars` | Sign in with VS Code's GitHub account so photos load in private repositories. |
 | `Git Glance: Copy Commit Hash`      | Copies the commit SHA of the current line to the clipboard.             |
 | `Git Glance: Show Commit Details`   | Opens an interactive QuickPick showing full commit details and actions. |
 | `Git Glance: Open Commit on Remote` | Opens the current commit page in your default browser.                  |
@@ -187,6 +188,7 @@ Nothing shows on the current line? Run `Git Glance: Show Log`. It lists the git 
 
 - **git not found**: Git Glance uses the same git as VS Code. Install git, or set `git.path` in your settings.
 - **"dubious ownership"** in the log: run `git config --global --add safe.directory <repo path>`.
+- **Initials instead of a teammate's photo**: the log says why. `(no GitHub token)` → run `Git Glance: Sign in to GitHub for Avatars`, or clone over HTTPS so git stores a token. `no account linked to this commit's email` → the teammate has to add that email to their GitHub account (Settings → Emails).
 
 ---
 
@@ -197,7 +199,9 @@ Git Glance has no telemetry and needs no account. Blame data never leaves your m
 With `gitGlance.avatarSource` set to `"remote"` (the default), author photos are looked up in the background:
 
 - **GitHub noreply emails** (`123+user@users.noreply.github.com`): the photo is downloaded from `github.com/<user>.png`.
-- **Repositories hosted on github.com**: the GitHub API is asked which account made the commit (repository name and commit SHA are sent).
+- **GitHub and GitHub Enterprise**: the GitHub API is asked for the repository's recent commit authors, then for the blamed commit (repository name and commit SHA are sent). Private repositories need a token. Git Glance uses, without asking: your GitHub sign-in in VS Code, or the token git already uses for HTTPS (`git credential fill` with prompts disabled; the token is only sent to that same GitHub host). If neither exists, Git Glance offers to sign in and shows initials until then.
+- **GitLab**: the GitLab instance is asked for the photo of the account with the author's email.
+- **Bitbucket Cloud, Gitea, Forgejo, Codeberg**: the host's API is asked which account made the commit (public repositories only).
 - **Gravatar**: the MD5 hash of the author's email is sent.
 
 Set `gitGlance.avatarSource` to `"initials"` to make no network requests, or turn avatars off with `gitGlance.showAvatar`.
@@ -225,7 +229,7 @@ code --install-extension ridiansyah.git-glance
 Download the latest `git-glance-x.x.x.vsix` from [GitHub Releases](https://github.com/ridiansyah/git-glance/releases) or build it locally, then:
 
 ```bash
-code --install-extension git-glance-1.3.2.vsix
+code --install-extension git-glance-1.4.0.vsix
 ```
 
 _Or via VS Code UI: Extensions view (`Cmd+Shift+X`) ➔ `...` menu at top right ➔ **Install from VSIX...** ➔ Select the `.vsix` file._

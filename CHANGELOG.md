@@ -4,6 +4,24 @@ All notable changes to the **Git Glance** extension will be documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Avatars of other authors**: teammates in private GitHub repositories showed initials instead of their photo. The GitHub lookup now uses a token without asking: your GitHub sign-in in VS Code, or the token git already uses for HTTPS (credential helper, prompts disabled). Only when neither exists does Git Glance offer to sign in, and photos load as soon as you do. A lookup that failed because you were not signed in or were rate limited is no longer remembered as "no photo" for a week. When GitHub's anonymous limit (60 requests/hour) runs out, Git Glance waits until it resets and offers to sign in.
+- GitHub Enterprise and repositories with a custom `gitGlance.commitUrlTemplate` now get photos too.
+
+### Added
+
+- **`Git Glance: Sign in to GitHub for Avatars`**: signs in with VS Code's GitHub account so photos load in private repositories. Git Glance also offers this once when a private repository needs it.
+- Avatar lookups are written to `Git Glance: Show Log`, including why a photo is missing (not signed in, rate limited, or no GitHub account linked to the commit email).
+- One GitHub request now fetches the repository's 100 most recent commit authors, so most photos need no request of their own.
+- Author photos from GitLab (by email), Bitbucket Cloud, and Gitea / Forgejo / Codeberg (by commit).
+
+### Changed
+
+- Updated bundle and package size metrics (~42 KB bundle, ~45 KB VSIX) and the local VSIX installation example (`git-glance-1.4.0.vsix`).
+
 ## [1.3.2] - 2026-10-19
 
 ### Changed

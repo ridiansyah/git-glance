@@ -73,6 +73,10 @@
         "icon": "$(account)"
       },
       {
+        "command": "gitGlance.signInGitHub",
+        "title": "Git Glance: Sign in to GitHub for Avatars"
+      },
+      {
         "command": "gitGlance.copyHash",
         "title": "Git Glance: Copy Commit Hash",
         "icon": "$(clippy)"
@@ -168,7 +172,7 @@
             "initials"
           ],
           "enumDescriptions": [
-            "Download author photos from GitHub and Gravatar (sends the email hash or commit SHA to those services). Initials are shown until a photo is found.",
+            "Download author photos from the repository host (GitHub, GitLab, Bitbucket Cloud, Gitea) and Gravatar. Sends the commit SHA or email to those services. Private GitHub repositories use your VS Code GitHub sign-in or git's stored HTTPS token. Initials are shown until a photo is found.",
             "Only show locally generated initials. Nothing is sent over the network."
           ],
           "default": "remote",

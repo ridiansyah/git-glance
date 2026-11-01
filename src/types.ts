@@ -1,3 +1,5 @@
+import { ParsedRemote } from "./utils/remote";
+
 export interface BlameInfo {
   sha: string;
   shortSha: string;
@@ -14,6 +16,8 @@ export interface BlameInfo {
   isCurrentUser?: boolean;
   repoRoot?: string;
   remoteCommitUrl?: string;
+  /** Remote the commit belongs to; used to look up the author's photo. */
+  remote?: ParsedRemote;
 }
 
 export interface BlameRequest {

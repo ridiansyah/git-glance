@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import * as os from "os";
+import { ParsedRemote, detectProvider } from "./remote";
 
 const AVATAR_COLORS = [
   "#6366f1", // Indigo
@@ -22,13 +23,41 @@ const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type AvatarReadyListener = (key: string, avatarPath: string) => void;
 
+/**
+ * Returns a GitHub token for `host`, or null. With `requestSignIn`, the user is
+ * asked to sign in (without a modal) when no session exists yet.
+ */
+export type GitHubTokenProvider = (
+  host: string,
+  requestSignIn: boolean,
+) => Promise<string | null>;
+
+export interface AvatarCommit {
+  sha: string;
+  remote?: ParsedRemote;
+}
+
+/**
+ * A photo URL, "none" when the source answered that there is no photo, or "retry"
+ * when the answer may change later (offline, rate limited, not signed in).
+ */
+type Lookup = { url: string } | "none" | "retry";
+
 export class AvatarService {
   private avatarDir: string;
   private memoryCache = new Map<string, string>();
   private fetchingSet = new Set<string>();
+  /** Epoch ms until which a GitHub host refuses requests, keyed by `host` + signed-in state. */
+  private rateLimitedUntil = new Map<string, number>();
+  /** Session cache of a repository's recent commit authors, keyed by repository API URL. */
+  private githubRecentAuthors = new Map<string, Promise<Map<string, string | null> | null>>();
   private listeners: AvatarReadyListener[] = [];
 
-  constructor(storagePath?: string) {
+  constructor(
+    storagePath?: string,
+    private getGitHubToken?: GitHubTokenProvider,
+    private log: (message: string) => void = () => {},
+  ) {
     let dir = "";
     if (storagePath) {
       try {
@@ -105,7 +134,7 @@ export class AvatarService {
     email: string,
     isUncommitted: boolean,
     allowRemote: boolean,
-    remoteCommitUrl?: string,
+    commit?: AvatarCommit,
   ): string | null {
     if (isUncommitted) {
       return this.getYouAvatarPath();
@@ -118,12 +147,12 @@ export class AvatarService {
     }
 
     const hash = crypto.createHash("md5").update(key).digest("hex");
-    const photoSvgPath = path.join(this.avatarDir, `${hash}_photo_v5.svg`);
+    const photoSvgPath = path.join(this.avatarDir, `${hash}_photo_v6.svg`);
     const initialsSvgPath = path.join(
       this.avatarDir,
-      `${hash}_initials_v5.svg`,
+      `${hash}_initials_v6.svg`,
     );
-    const notFoundPath = path.join(this.avatarDir, `${hash}_none_v5`);
+    const notFoundPath = path.join(this.avatarDir, `${hash}_none_v6`);
 
     // 1. If photo SVG was already downloaded and wrapped, use it!
     if (allowRemote && fs.existsSync(photoSvgPath)) {
@@ -150,7 +179,7 @@ export class AvatarService {
       !this.isRecentlyNotFound(notFoundPath)
     ) {
       this.fetchingSet.add(key);
-      this.fetchRemoteAvatar(email, photoSvgPath, notFoundPath, key, remoteCommitUrl);
+      this.fetchRemoteAvatar(email, photoSvgPath, notFoundPath, key, commit);
     }
 
     return initialsSvgPath;
@@ -261,7 +290,8 @@ export class AvatarService {
    * Fetches the author photo in the background. Only sources tied to the commit
    * email are used, so a photo always belongs to the commit's author:
    *   1. GitHub noreply email → that GitHub user
-   *   2. GitHub commit API (github.com remotes) → the account GitHub linked to the email
+   *   2. The repository host: GitHub / GitHub Enterprise commit API, GitLab avatar
+   *      API, Bitbucket Cloud or Gitea/Forgejo commit API
    *   3. Gravatar for the email
    * When every source answers "no photo", that's remembered on disk for a week.
    */
@@ -270,79 +300,57 @@ export class AvatarService {
     targetSvgPath: string,
     notFoundPath: string,
     key: string,
-    remoteCommitUrl?: string,
+    commit?: AvatarCommit,
   ) {
     const cleanEmail = email.toLowerCase().trim();
-    let hadNetworkError = false;
+    let shouldRetry = false;
 
-    const candidates: Array<() => Promise<string | null>> = [];
+    const candidates: Array<() => Promise<Lookup>> = [];
 
     const noreplyMatch = cleanEmail.match(
       /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/,
     );
     if (noreplyMatch !== null) {
       const username = noreplyMatch[1];
-      candidates.push(async () =>
-        `https://github.com/${encodeURIComponent(username)}.png?size=28`,
-      );
+      candidates.push(async () => ({
+        url: `https://github.com/${encodeURIComponent(username)}.png?size=28`,
+      }));
     }
 
-    const githubCommit =
-      remoteCommitUrl === undefined
-        ? null
-        : remoteCommitUrl.match(
-            /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/commit\/([0-9a-f]+)$/,
-          );
-    if (noreplyMatch === null && githubCommit !== null) {
-      const [, owner, repo, sha] = githubCommit;
-      candidates.push(async () => {
-        const response = await this.fetchWithTimeout(
-          `https://api.github.com/repos/${owner}/${repo}/commits/${sha}`,
-          { accept: "application/vnd.github+json" },
-        );
-        if (response === null) {
-          hadNetworkError = true;
-          return null;
-        }
-        if (!response.ok) {
-          // 403 = rate limited: not a definitive "no photo"
-          if (response.status === 403 || response.status === 429) {
-            hadNetworkError = true;
-          }
-          return null;
-        }
-        const body = (await response.json()) as {
-          author?: { avatar_url?: unknown } | null;
-        };
-        const avatarUrl = body.author?.avatar_url;
-        if (typeof avatarUrl !== "string") {
-          return null;
-        }
-        const url = new URL(avatarUrl);
-        url.searchParams.set("s", "28");
-        return url.toString();
-      });
+    const remote = commit?.remote;
+    if (noreplyMatch === null && remote !== undefined && commit !== undefined) {
+      const lookup = this.hostLookup(remote, commit.sha, cleanEmail);
+      if (lookup !== null) {
+        candidates.push(lookup);
+      }
     }
 
     if (cleanEmail.length > 0 && !cleanEmail.includes("noreply")) {
       const hash = crypto.createHash("md5").update(cleanEmail).digest("hex");
-      candidates.push(async () =>
-        `https://www.gravatar.com/avatar/${hash}?s=28&d=404`,
-      );
+      candidates.push(async () => ({
+        url: `https://www.gravatar.com/avatar/${hash}?s=28&d=404`,
+      }));
     }
 
-    for (const resolveUrl of candidates) {
+    for (const lookup of candidates) {
       try {
-        const url = await resolveUrl();
-        if (url === null) {
+        const result = await lookup();
+        if (result === "retry") {
+          shouldRetry = true;
           continue;
         }
-        const response = await this.fetchWithTimeout(url);
+        if (result === "none") {
+          continue;
+        }
+        const response = await this.fetchWithTimeout(result.url);
         if (response === null) {
-          hadNetworkError = true;
+          shouldRetry = true;
           continue;
         }
         if (!response.ok) {
+          if (!result.url.startsWith("https://www.gravatar.com/")) {
+            this.log(`Avatar ${cleanEmail}: ${new URL(result.url).host} answered ${response.status}`);
+          }
           continue;
         }
         const header = response.headers.get("content-type");
@@ -360,20 +368,250 @@ export class AvatarService {
         );
         this.remember(key, targetSvgPath);
         this.notifyAvatarReady(key, targetSvgPath);
+        this.log(`Avatar ${cleanEmail}: photo from ${new URL(result.url).host}`);
         return;
-      } catch {
-        hadNetworkError = true;
+      } catch (error) {
+        this.log(`Avatar ${cleanEmail}: lookup failed (${String(error)})`);
+        shouldRetry = true;
       }
     }
 
-    // Offline or blocked by a proxy: try again next session instead of for a week.
-    if (!hadNetworkError) {
+    this.log(
+      shouldRetry
+        ? `Avatar ${cleanEmail}: no photo yet, retrying next session`
+        : `Avatar ${cleanEmail}: no photo found, showing initials for a week`,
+    );
+
+    // Offline, rate limited or not signed in: try again next session instead of for a week.
+    if (!shouldRetry) {
       try {
         fs.writeFileSync(notFoundPath, "", "utf8");
       } catch {
         // ignore
       }
     }
+  }
+
+  /** Picks the photo lookup offered by the repository host, if it has one. */
+  private hostLookup(
+    remote: ParsedRemote,
+    sha: string,
+    email: string,
+  ): (() => Promise<Lookup>) | null {
+    const baseUrl = `${remote.scheme}//${remote.host}${remote.port ? `:${remote.port}` : ""}`;
+    const segments = remote.path.split("/");
+    const owner = segments[segments.length - 2];
+    const repo = segments[segments.length - 1];
+
+    switch (detectProvider(remote)) {
+      case "github": {
+        if (owner === undefined) {
+          return null;
+        }
+        const apiBase =
+          remote.host === "github.com" ? "https://api.github.com" : `${baseUrl}/api/v3`;
+        return () =>
+          this.lookupGitHub(remote.host, `${apiBase}/repos/${owner}/${repo}`, sha, email);
+      }
+      case "gitlab": {
+        if (email.length === 0) {
+          return null;
+        }
+        return () =>
+          this.lookupJson(
+            `${baseUrl}/api/v4/avatar?email=${encodeURIComponent(email)}&size=28`,
+            (body) => {
+              const url = (body as { avatar_url?: unknown }).avatar_url;
+              // GitLab falls back to a Gravatar identicon; the Gravatar lookup below handles that email.
+              return typeof url === "string" && !url.includes("gravatar.com") ? url : null;
+            },
+          );
+      }
+      case "bitbucket-cloud": {
+        if (owner === undefined) {
+          return null;
+        }
+        return () =>
+          this.lookupJson(
+            `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/commit/${sha}`,
+            (body) => {
+              const href = (
+                body as { author?: { user?: { links?: { avatar?: { href?: unknown } } } } }
+              ).author?.user?.links?.avatar?.href;
+              return typeof href === "string" ? href : null;
+            },
+          );
+      }
+      case "generic": {
+        if (owner === undefined) {
+          return null;
+        }
+        // Gitea, Forgejo and Codeberg; other hosts answer 404 and fall through to Gravatar.
+        return () =>
+          this.lookupJson(
+            `${baseUrl}/api/v1/repos/${owner}/${repo}/git/commits/${sha}`,
+            (body) => {
+              const url = (body as { author?: { avatar_url?: unknown } | null }).author
+                ?.avatar_url;
+              return typeof url === "string" ? url : null;
+            },
+          );
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Looks the author up in the repository's 100 most recent commits (one request
+   * fills many authors), then in the blamed commit itself. GitHub answers 404 for
+   * private repositories without a token, so that answer never means "no photo".
+   */
+  private async lookupGitHub(
+    host: string,
+    repoApiUrl: string,
+    sha: string,
+    email: string,
+  ): Promise<Lookup> {
+    const token =
+      this.getGitHubToken === undefined ? null : await this.getGitHubToken(host, false);
+
+    if (email.length > 0) {
+      let recent = this.githubRecentAuthors.get(repoApiUrl);
+      if (recent === undefined) {
+        recent = this.fetchGitHub(host, `${repoApiUrl}/commits?per_page=100`, token).then(
+          (body) => {
+            if (!Array.isArray(body)) {
+              this.githubRecentAuthors.delete(repoApiUrl);
+              return null;
+            }
+            return this.authorsByEmail(body);
+          },
+        );
+        this.githubRecentAuthors.set(repoApiUrl, recent);
+      }
+      const authors = await recent;
+      if (authors !== null && authors.has(email)) {
+        return this.githubAvatar(host, authors.get(email)!);
+      }
+    }
+
+    const body = await this.fetchGitHub(host, `${repoApiUrl}/commits/${sha}`, token);
+    if (body === null) {
+      return "retry";
+    }
+    const author = (body as { author?: { avatar_url?: unknown } | null }).author;
+    return this.githubAvatar(
+      host,
+      typeof author?.avatar_url === "string" ? author.avatar_url : null,
+    );
+  }
+
+  /** Maps each commit email to its GitHub avatar URL, or null when no account is linked. */
+  private authorsByEmail(commits: unknown[]): Map<string, string | null> {
+    const authors = new Map<string, string | null>();
+    for (const item of commits) {
+      const commit = item as {
+        commit?: { author?: { email?: unknown } };
+        author?: { avatar_url?: unknown } | null;
+      };
+      const commitEmail = commit.commit?.author?.email;
+      if (typeof commitEmail !== "string") {
+        continue;
+      }
+      const avatarUrl = commit.author?.avatar_url;
+      const key = commitEmail.toLowerCase().trim();
+      if (typeof avatarUrl === "string") {
+        authors.set(key, avatarUrl);
+      } else if (!authors.has(key)) {
+        authors.set(key, null);
+      }
+    }
+    return authors;
+  }
+
+  private githubAvatar(host: string, avatarUrl: string | null): Lookup {
+    if (avatarUrl === null) {
+      this.log(`Avatar: ${host} has no account linked to this commit's email`);
+      return "none";
+    }
+    const url = new URL(avatarUrl);
+    url.searchParams.set("s", "28");
+    return { url: url.toString() };
+  }
+
+  /** GitHub API GET; null when the answer may change later (offline, rate limited, no access). */
+  private async fetchGitHub(
+    host: string,
+    apiUrl: string,
+    token: string | null,
+  ): Promise<unknown> {
+    const headers: Record<string, string> = { accept: "application/vnd.github+json" };
+    if (token !== null) {
+      headers.authorization = `Bearer ${token}`;
+    }
+
+    const limitKey = `${host}:${token === null ? "anonymous" : "signed-in"}`;
+    const limitedUntil = this.rateLimitedUntil.get(limitKey);
+    if (limitedUntil !== undefined && Date.now() < limitedUntil) {
+      return null;
+    }
+
+    const response = await this.fetchWithTimeout(apiUrl, headers);
+    if (response === null) {
+      this.log(`Avatar: ${host} API unreachable`);
+      return null;
+    }
+    if (!response.ok) {
+      const rateLimited =
+        response.status === 429 ||
+        (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0");
+      if (rateLimited) {
+        const reset = Number(response.headers.get("x-ratelimit-reset"));
+        this.rateLimitedUntil.set(
+          limitKey,
+          Number.isFinite(reset) && reset > 0 ? reset * 1000 : Date.now() + 60 * 60 * 1000,
+        );
+      }
+      this.log(
+        `Avatar: ${host} API answered ${response.status}${rateLimited ? " (rate limited)" : ""} ${token === null ? "(no GitHub token)" : "(with token)"}`,
+      );
+      // A token lifts both: private repositories (401/404) and the 60 requests/hour anonymous limit.
+      if (
+        (token === null && [401, 403, 404, 429].includes(response.status)) ||
+        response.status === 401
+      ) {
+        void this.getGitHubToken?.(host, true);
+      }
+      // 404/422 with a token = commit not pushed yet
+      return null;
+    }
+    return response.json();
+  }
+
+  private async lookupJson(
+    apiUrl: string,
+    pickUrl: (body: unknown) => string | null,
+  ): Promise<Lookup> {
+    const response = await this.fetchWithTimeout(apiUrl, { accept: "application/json" });
+    if (response === null) {
+      return "retry";
+    }
+    if (!response.ok) {
+      return response.status === 429 ? "retry" : "none";
+    }
+    const url = pickUrl(await response.json());
+    return url === null ? "none" : { url };
+  }
+
+  /**
+   * Forgets this session's lookups so authors get looked up again, e.g. after
+   * signing in to GitHub.
+   */
+  public resetLookups() {
+    this.memoryCache.clear();
+    this.fetchingSet.clear();
+    this.githubRecentAuthors.clear();
   }
 
   /** Resolves to null on network errors and timeouts. */

@@ -4,6 +4,7 @@ import { DecorationManager } from "./decoration";
 import { GlanceController } from "./glance-controller";
 import { registerCommands } from "./commands";
 import { AvatarService } from "./utils/avatar";
+import { createGitHubTokenProvider, signInToGitHub } from "./utils/auth";
 
 let controller: GlanceController | undefined;
 let decorationManager: DecorationManager | undefined;
@@ -45,7 +46,13 @@ export function activate(context: vscode.ExtensionContext) {
       });
   };
   decorationManager = new DecorationManager();
-  avatarService = new AvatarService(context.globalStorageUri?.fsPath);
+  avatarService = new AvatarService(
+    context.globalStorageUri?.fsPath,
+    createGitHubTokenProvider(context.globalState, (host) =>
+      gitService!.getStoredCredential(host),
+    ),
+    (message) => getLogChannel().info(message),
+  );
   controller = new GlanceController(
     gitService,
     decorationManager,
@@ -55,6 +62,12 @@ export function activate(context: vscode.ExtensionContext) {
   // Register commands
   registerCommands(context, controller, gitService, () =>
     getLogChannel().show(true),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gitGlance.signInGitHub", () =>
+      signInToGitHub(),
+    ),
   );
 
   // Register event listeners
@@ -82,6 +95,13 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("gitGlance")) {
         controller?.reloadConfig();
+      }
+    }),
+
+    vscode.authentication.onDidChangeSessions((e) => {
+      if (e.provider.id === "github" || e.provider.id === "github-enterprise") {
+        avatarService?.resetLookups();
+        controller?.refreshActiveEditor();
       }
     }),
 

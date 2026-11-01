@@ -295,7 +295,7 @@ export class GlanceController {
         blame.authorEmail,
         blame.isUncommitted,
         this.config.avatarSource === "remote",
-        blame.remoteCommitUrl,
+        { sha: blame.sha, remote: blame.remote },
       );
       if (avatarPath) {
         avatarUri = vscode.Uri.file(avatarPath);

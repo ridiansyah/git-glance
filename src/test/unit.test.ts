@@ -756,15 +756,203 @@ test("AvatarService - initials-only mode never resolves a photo", () => {
       "jane@example.com",
       false,
       false,
-      "https://github.com/acme/app/commit/1234567890abcdef1234567890abcdef12345678",
+      {
+        sha: "1234567890abcdef1234567890abcdef12345678",
+        remote: parseRemoteUrl("git@github.com:acme/app.git")!,
+      },
     );
     assert.ok(avatarPath);
-    assert.strictEqual(avatarPath.endsWith("_initials_v5.svg"), true);
+    assert.strictEqual(avatarPath.endsWith("_initials_v6.svg"), true);
     assert.strictEqual(fs.readFileSync(avatarPath, "utf8").includes(">JD<"), true);
     avatarService.dispose();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const SHA = "1234567890abcdef1234567890abcdef12345678";
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+/**
+ * Runs one background avatar lookup against a stubbed `fetch`. `respond` returns
+ * the response for each requested URL; unknown URLs answer 404.
+ */
+async function lookUpAvatar(options: {
+  remote: string;
+  email?: string;
+  token?: string | null;
+  respond: (url: string) => Response | undefined;
+}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "git-glance-avatar-"));
+  const realFetch = globalThis.fetch;
+  const requests: Array<{ url: string; headers: Record<string, string> }> = [];
+  const signInRequests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
+    return options.respond(url) ?? new Response("", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new AvatarService(dir, async (host, requestSignIn) => {
+      if (requestSignIn) {
+        signInRequests.push(host);
+      }
+      return options.token ?? null;
+    });
+    const ready = new Promise<string>((resolve) => service.onAvatarReady((_, p) => resolve(p)));
+    service.getAvatarPath("Jane Doe", options.email ?? "jane@acme.dev", false, true, {
+      sha: SHA,
+      remote: parseRemoteUrl(options.remote)!,
+    });
+    const photo = await Promise.race([
+      ready,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+    ]);
+    const files = fs.readdirSync(path.join(dir, "avatars"));
+    service.dispose();
+    return { photo, files, requests, signInRequests };
+  } finally {
+    globalThis.fetch = realFetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const json = (body: unknown) =>
+  new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+const png = () => new Response(PNG, { headers: { "content-type": "image/png" } });
+
+test("AvatarService - private GitHub repo without sign-in keeps retrying and asks to sign in", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@github.com:acme/private-app.git",
+    respond: () => undefined,
+  });
+  assert.strictEqual(result.photo, null);
+  assert.strictEqual(result.files.some((f) => f.includes("_none_")), false);
+  // The token provider shows the prompt once per session; repeated requests are fine here.
+  assert.strictEqual(result.signInRequests.includes("github.com"), true);
+});
+
+test("AvatarService - GitHub rate limit asks to sign in", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@github.com:acme/app.git",
+    respond: (url) =>
+      url.startsWith("https://api.github.com/")
+        ? new Response("", {
+            status: 403,
+            headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999999999" },
+          })
+        : undefined,
+  });
+  assert.strictEqual(result.photo, null);
+  assert.strictEqual(result.files.some((f) => f.includes("_none_")), false);
+  assert.deepStrictEqual(result.signInRequests, ["github.com"]);
+});
+
+test("AvatarService - GitHub commit API uses the VS Code token", async () => {
+  const result = await lookUpAvatar({
+    remote: "https://github.com/acme/private-app.git",
+    token: "gho_test",
+    respond: (url) => {
+      if (url === `https://api.github.com/repos/acme/private-app/commits/${SHA}`) {
+        return json({ author: { avatar_url: "https://avatars.githubusercontent.com/u/1?v=4" } });
+      }
+      if (url.startsWith("https://avatars.githubusercontent.com/u/1")) {
+        return png();
+      }
+      return undefined;
+    },
+  });
+  assert.ok(result.photo?.endsWith("_photo_v6.svg"));
+  assert.strictEqual(result.requests[0].headers.authorization, "Bearer gho_test");
+  assert.deepStrictEqual(result.signInRequests, []);
+});
+
+test("AvatarService - GitHub recent commits fill the author without a per-commit request", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@github.com:acme/app.git",
+    email: "Jane@Acme.dev",
+    respond: (url) => {
+      if (url === "https://api.github.com/repos/acme/app/commits?per_page=100") {
+        return json([
+          { commit: { author: { email: "bob@acme.dev" } }, author: null },
+          {
+            commit: { author: { email: "jane@acme.dev" } },
+            author: { avatar_url: "https://avatars.githubusercontent.com/u/7?v=4" },
+          },
+        ]);
+      }
+      return url.startsWith("https://avatars.githubusercontent.com/u/7") ? png() : undefined;
+    },
+  });
+  assert.ok(result.photo?.endsWith("_photo_v6.svg"));
+  assert.strictEqual(
+    result.requests.some((r) => r.url.includes(`/commits/${SHA}`)),
+    false,
+  );
+});
+
+test("AvatarService - GitHub Enterprise uses the /api/v3 commit API", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@github.acme.dev:team/app.git",
+    respond: () => undefined,
+  });
+  assert.deepStrictEqual(
+    result.requests.slice(0, 2).map((r) => r.url),
+    [
+      "https://github.acme.dev/api/v3/repos/team/app/commits?per_page=100",
+      `https://github.acme.dev/api/v3/repos/team/app/commits/${SHA}`,
+    ],
+  );
+});
+
+test("AvatarService - GitLab looks up the photo by email", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@gitlab.com:acme/group/app.git",
+    respond: (url) => {
+      if (url === "https://gitlab.com/api/v4/avatar?email=jane%40acme.dev&size=28") {
+        return json({ avatar_url: "https://gitlab.com/uploads/-/system/user/avatar/1/a.png" });
+      }
+      if (url.startsWith("https://gitlab.com/uploads/")) {
+        return png();
+      }
+      return undefined;
+    },
+  });
+  assert.ok(result.photo?.endsWith("_photo_v6.svg"));
+});
+
+test("AvatarService - Bitbucket Cloud and Gitea use their commit APIs", async () => {
+  const bitbucket = await lookUpAvatar({
+    remote: "git@bitbucket.org:acme/app.git",
+    respond: (url) => {
+      if (url === `https://api.bitbucket.org/2.0/repositories/acme/app/commit/${SHA}`) {
+        return json({ author: { user: { links: { avatar: { href: "https://bb.example/a.png" } } } } });
+      }
+      return url === "https://bb.example/a.png" ? png() : undefined;
+    },
+  });
+  assert.ok(bitbucket.photo?.endsWith("_photo_v6.svg"));
+
+  const gitea = await lookUpAvatar({
+    remote: "https://codeberg.org/acme/app.git",
+    respond: (url) => {
+      if (url === `https://codeberg.org/api/v1/repos/acme/app/git/commits/${SHA}`) {
+        return json({ author: { avatar_url: "https://codeberg.org/avatars/a" } });
+      }
+      return url === "https://codeberg.org/avatars/a" ? png() : undefined;
+    },
+  });
+  assert.ok(gitea.photo?.endsWith("_photo_v6.svg"));
+});
+
+test("AvatarService - remembers 'no photo' when every source says so", async () => {
+  const result = await lookUpAvatar({
+    remote: "git@gitlab.com:acme/app.git",
+    respond: (url) => (url.includes("/api/v4/avatar") ? json({ avatar_url: null }) : undefined),
+  });
+  assert.strictEqual(result.photo, null);
+  assert.strictEqual(result.files.some((f) => f.endsWith("_none_v6")), true);
 });
 
 test("remote utility - encodes path segments and detects on-prem Azure DevOps", () => {

@@ -1,6 +1,7 @@
 import * as cp from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { BlameInfo, BlameRequest, GitLogger, GitServiceOptions } from "./types";
 import { isInsideDir } from "./utils/paths";
 import { ParsedRemote, commitUrlFromParsed, parseRemoteUrl } from "./utils/remote";
@@ -36,6 +37,9 @@ interface ExecOptions {
   stdin?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  env?: Record<string, string>;
+  /** Don't log a failure (expected for lookups that may find nothing). */
+  quiet?: boolean;
 }
 
 interface PendingFullBlame {
@@ -330,6 +334,29 @@ export class GitService {
   }
 
   /**
+   * Reads the password/token git would use for `https://<host>` from the configured
+   * credential helper (keychain, Git Credential Manager). Never prompts; null when
+   * nothing is stored.
+   */
+  public async getStoredCredential(host: string): Promise<string | null> {
+    if (!/^[a-z0-9.-]+(:\d+)?$/i.test(host)) {
+      return null;
+    }
+    try {
+      const output = await this.execGit(["credential", "fill"], os.homedir(), {
+        stdin: `protocol=https\nhost=${host}\n\n`,
+        timeoutMs: 5000,
+        env: { GCM_INTERACTIVE: "never", GIT_ASKPASS: "", SSH_ASKPASS: "" },
+        quiet: true,
+      });
+      const match = output.match(/^password=(.+)$/m);
+      return match === null ? null : match[1].trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Retrieves remote web URL for a commit (e.g. GitHub/GitLab).
    */
   public async getRemoteCommitUrl(
@@ -604,6 +631,7 @@ export class GitService {
       this.isCurrentUser(blame.authorEmail, context.currentUserEmail);
 
     if (context.remote !== null && !blame.isUncommitted) {
+      blame.remote = context.remote;
       let remoteUrl = context.commitUrls.get(blame.sha);
       if (remoteUrl === undefined) {
         remoteUrl = commitUrlFromParsed(
@@ -944,6 +972,7 @@ export class GitService {
           GIT_TERMINAL_PROMPT: "0",
           // English messages: the stderr checks below must not depend on the OS language.
           LC_ALL: "C",
+          ...options.env,
         },
       });
 
@@ -1008,7 +1037,7 @@ export class GitService {
         if (code === 0) {
           settle(null, Buffer.concat(stdoutChunks).toString("utf8"));
         } else {
-          if (!BENIGN_STDERR.test(stderr)) {
+          if (!options.quiet && !BENIGN_STDERR.test(stderr)) {
             this.logOnce("warn", `git ${args[0]} failed (${code}): ${stderr.trim()}`);
           }
           settle(

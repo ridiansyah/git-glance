@@ -21,7 +21,7 @@
 - **Package Manager**: `pnpm` (run with `pnpm install`, `pnpm run compile`, `pnpm test`).
 - **Language**: TypeScript (ES2022 target, strict mode enabled).
 - **Bundler**: `esbuild` (CJS bundle into `dist/extension.js`, externalizing `vscode`, `--target=node18` to match the Node runtime of VS Code 1.85's Electron).
-- **Packaging**: `@vscode/vsce` (~39 KB minified bundle / ~42 KB total `.vsix` with icon).
+- **Packaging**: `@vscode/vsce` (~42 KB minified bundle / ~45 KB total `.vsix` with icon).
 - **Testing**: Built-in `node:test` runner (`pnpm test`) compiling tests on the fly via `esbuild`. Pure-function tests live in `unit.test.ts`; `git-service.test.ts` runs `GitService` against real temporary git repositories.
 
 ---
@@ -52,9 +52,11 @@ git-glance/
 │   ├── git.ts               # Git CLI executor (typed errors), porcelain parser, cache, remote & ignore-revs resolver
 │   ├── decoration.ts        # TextEditorDecorationType management & Markdown hover builder
 │   ├── commands.ts          # VS Code command registrations (toggle, toggleAvatar, copyHash, details, remote)
+│   │                        # (gitGlance.signInGitHub is registered in extension.ts)
 │   ├── types.ts             # TypeScript interfaces (BlameInfo, BlameRequest, GitServiceOptions, GitGlanceConfig, ...)
 │   ├── utils/
-│   │   ├── avatar.ts        # 14x14 SVG initials generator & email-verified avatar resolver (GitHub, Gravatar)
+│   │   ├── auth.ts          # GitHub token provider (VS Code sign-in → git credential helper → sign-in prompt); only vscode import under utils/
+│   │   ├── avatar.ts        # 14x14 SVG initials generator & email-verified avatar resolver (GitHub, GitLab, Bitbucket, Gitea, Gravatar)
 │   │   ├── date.ts          # Human-friendly relative time, short date, and ISO date formatters
 │   │   ├── format.ts        # Preset registry, string interpolator, truncation & markdown escaping
 │   │   ├── paths.ts         # Pure cross-platform path normalizer (Windows drive/slash/case) & isInsideDir
@@ -98,17 +100,23 @@ Git Glance runs inside the VS Code editor canvas. All UI must be clean, unintrus
   - Both `avatarDecorationType` and `textDecorationType` use this technique so avatar and text align to the same vertical center.
   - **NEVER use `margin-bottom` negative values** for vertical alignment — they don't reliably center and cause line-height distortion.
   - To prevent line-height distortion, all avatar SVGs **MUST use native dimensions of exactly 14px × 14px** (`viewBox="0 0 14 14" width="14" height="14"`) with circle centered at `(7, 7)` and radius `7`.
-  - Cache files use `_v5.svg` suffix to guarantee cache invalidation. Downloaded photos are requested at 28 px and wrapped with a single `href` (no `xlink:href` duplicate); `memoryCache` holds at most 200 keys.
+  - Cache files use `_v6.svg` suffix to guarantee cache invalidation. Downloaded photos are requested at 28 px and wrapped with a single `href` (no `xlink:href` duplicate); `memoryCache` holds at most 200 keys.
 - **Avatar Resolution Strategy**:
   1. Local initials SVG (14x14) generated synchronously for instant display.
-  2. Background remote fetch waterfall, **only from sources tied to the commit email**: GitHub noreply email username -> GitHub commit API `repos/{owner}/{repo}/commits/{sha}` → `author.avatar_url` (github.com remotes only) -> Gravatar MD5.
+  2. Background remote fetch waterfall, **only from sources tied to the commit email**: GitHub noreply email username -> repository host -> Gravatar MD5. The host is picked from `BlameInfo.remote` (`ParsedRemote` + `detectProvider`), never from `remoteCommitUrl` (a custom `commitUrlTemplate` would break it):
+     - GitHub / GHE (`api.github.com` or `<host>/api/v3`): `repos/{o}/{r}/commits?per_page=100` once per repo per session (email → `author.avatar_url` map), then `commits/{sha}`.
+     - GitLab: `<host>/api/v4/avatar?email=` (Gravatar fallback URLs ignored). Bitbucket Cloud: `2.0/repositories/{ws}/{repo}/commit/{sha}`. Generic (Gitea/Forgejo/Codeberg): `<host>/api/v1/repos/{o}/{r}/git/commits/{sha}`. Azure DevOps, CodeCommit, Bitbucket Server: Gravatar only.
+   - **GitHub token** (`GitHubTokenProvider`, `src/utils/auth.ts`), all silent: VS Code `github` / `github-enterprise` session with scopes `["repo"]` → `GitService.getStoredCredential(host)` (`git credential fill`, `GCM_INTERACTIVE=never`, empty askpass, 5 s, cached per host per session). The token is only sent to the GitHub host it belongs to. Never call `git credential approve/reject`.
+   - Without a token, 401/403/404/429 ask to sign in (information message, once per host per session, "Don't Ask Again" in `globalState`). A rate-limited host (`x-ratelimit-remaining: 0`) is skipped until `x-ratelimit-reset`. `onDidChangeSessions` → `resetLookups()` + re-render.
   3. **NEVER guess a GitHub/GitLab handle from the author name.** `github.com/<name>.png` for a name like `John` or `admin` returns an unrelated account's photo.
-  4. When every source answers "no photo", a `${hash}_none_v5` marker is written and the lookup is skipped for 7 days. Network errors, timeouts and rate limits (403/429) do not write the marker.
+  4. Each lookup returns `{ url }`, `"none"` or `"retry"`. Only when every source answers `"none"` is a `${hash}_none_v6` marker written (lookup skipped for 7 days). Network errors, rate limits and any GitHub non-OK answer (a private repo without a token answers 404) are `"retry"`: no marker, tried again next session.
+  - Every lookup outcome is logged to the `Git Glance` output channel (`Avatar <email>: ...`).
   5. Live reactive update: Once remote photo is downloaded and converted to 14x14 SVG, `AvatarService` notifies `GlanceController` via `onAvatarReady` to re-render the active editor line without requiring cursor movements.
 - **Avatar Configuration & Toggle**:
   - `gitGlance.showAvatar` (boolean, default: `true`): Master switch to toggle avatar visibility.
   - `gitGlance.avatarSource` (`"remote"` | `"initials"`, default: `"remote"`): `"initials"` never touches the network and ignores previously downloaded photos.
   - `gitGlance.toggleAvatar` command: Quickly toggle avatar visibility on/off via Command Palette.
+  - `gitGlance.signInGitHub` command: `getSession("github", ["repo"], { createIfNone: true })`.
 - **Colors**: Never hardcode hex colors in code. Always use `new vscode.ThemeColor('gitGlance.inlineColor')`, which falls back to theme-adaptive defaults defined in `package.json` (`#88888888` on dark, `#66666688` on light).
 - **Default Visual Style (User Default)**:
   - Committed lines (current user): `(avatar) You, 3 days ago: ${message}` (avatar badge preserved for current user, author token replaced with `You`)
@@ -281,7 +289,7 @@ pnpm run package:vsix  # produce compact .vsix package
 - **Release Documentation**: Every release MUST be logged in [`CHANGELOG.md`](file:///Users/ridiansyah/Developer/git-glance/CHANGELOG.md) adhering to Keep a Changelog.
 - **Community Standards**: Maintain [`CONTRIBUTING.md`](file:///Users/ridiansyah/Developer/git-glance/CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](file:///Users/ridiansyah/Developer/git-glance/CODE_OF_CONDUCT.md), and [`SECURITY.md`](file:///Users/ridiansyah/Developer/git-glance/SECURITY.md) in English.
 - **Marketplace Assets**: The extension icon is located at `images/icon.png` (256x256 PNG) and must be bundled into the package via `.vscodeignore` whitelist.
-- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under ~35 KB with icon; currently ~41 KB, already above target). Report the size whenever it grows. Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
+- **Package Size Verification**: The built `.vsix` file MUST stay ultra-compact (target under ~35 KB with icon; currently ~45 KB, already above target). Report the size whenever it grows. Keep non-runtime assets, tests, and source code ignored in `.vscodeignore`.
 
 ---
 
